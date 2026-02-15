@@ -1,2151 +1,2555 @@
 # Design Document: SwastSetu AI Health Copilot
 
-## Overview
+## Executive Summary
 
-### System Purpose
+This design document outlines the technical architecture and implementation strategy for SwastSetu AI, a dual-mode AI-powered healthcare system serving rural and underserved populations across India. The system comprises Mode A (patient-facing voice-first health risk navigator) and Mode B (doctor-facing clinical intelligence cockpit), built on a microservices architecture with a 5-layer safety framework ensuring no AI-generated diagnoses or prescriptions reach patients without human oversight.
 
-SwastSetu AI is a dual-mode AI-powered healthcare platform designed to bridge the healthcare gap in rural and underserved populations across India. The system addresses critical challenges including extreme doctor-patient ratios (1:1000+), language barriers across 22+ Indian languages, and limited internet access in rural areas.
+The design prioritizes safety, scalability, and accessibility, supporting 10,000 concurrent IVR calls, 22+ Indian languages, and deployment across 100+ Primary Health Centers. The architecture leverages AWS cloud infrastructure, AWS Bedrock for AI capabilities, and integrates with India's Ayushman Bharat Digital Mission (ABDM) for national health record interoperability.
 
-### Design Philosophy
-
-The design is built on three core principles:
-
-1. **Safety-First Architecture**: A 5-layer safety system ensures no AI-generated diagnoses or prescriptions reach patients directly, with mandatory human oversight for all clinical decisions.
-
-2. **Accessibility-First Design**: Voice-first interfaces requiring no digital literacy, multilingual support for 22+ Indian languages, and operation over basic 2G networks ensure universal access.
-
-3. **Human-in-the-Loop AI**: All AI outputs are assistive rather than autonomous, with confidence gating, human escalation, and explicit doctor approval for clinical decisions.
-
-### System Modes
-
-**Mode A: Patient-Facing Health Risk Navigator**
-- Toll-free IVR-based voice interface accessible from any phone
-- Multilingual symptom assessment in 22+ Indian languages
-- AI-driven risk classification (Low, Moderate, High urgency)
-- Safety guardrails preventing diagnosis/prescription disclosure
-- Emergency escalation for high-risk cases
-
-**Mode B: Doctor-Facing Clinical Intelligence Cockpit**
-- Prioritized triage queue ordered by risk level
-- AI-generated SOAP notes reducing documentation time by 70%
-- Longitudinal patient history across all visits
-- OCR-based lab report digitization
-- Document QA for querying medical records
-- AI clinical suggestion engine with explainability
-- ABDM integration for national health record sync
-
-
-## Architecture
+## System Architecture
 
 ### High-Level Architecture
 
-The system follows a microservices architecture deployed on AWS cloud infrastructure with the following layers:
-
-```mermaid
-graph TB
-    subgraph "Patient Access Layer"
-        IVR[IVR Service<br/>Toll-Free Phone]
-        Mobile[Mobile App<br/>Optional]
-    end
-    
-    subgraph "Provider Access Layer"
-        WebApp[Web Application<br/>Mode B]
-        MobileApp[Mobile App<br/>Mode B]
-    end
-    
-    subgraph "API Gateway Layer"
-        APIGateway[AWS API Gateway<br/>Authentication & Rate Limiting]
-    end
-    
-    subgraph "Application Services Layer"
-        VoiceService[Voice Processing Service<br/>Whisper ASR]
-        TranslationService[Translation Service<br/>IndicTrans2]
-        SymptomService[Symptom Assessment Service<br/>NLP + Medical Ontology]
-        RiskService[Risk Classification Service<br/>ML Model + Confidence Scoring]
-        SafetyService[Safety Guardrail Service<br/>Content Filtering]
-        TriageService[Triage Queue Service<br/>Real-time Prioritization]
-        SOAPService[SOAP Generation Service<br/>Clinical Note AI]
-        OCRService[OCR Service<br/>Lab Report Processing]
-        DocumentQA[Document QA Service<br/>RAG Architecture]
-        SuggestionService[Clinical Suggestion Service<br/>Differential Diagnosis AI]
-        NotificationService[Notification Service<br/>Emergency Alerts]
-    end
-    
-    subgraph "AI/ML Layer"
-        Bedrock[AWS Bedrock<br/>Foundation Models]
-        CustomModels[Custom ML Models<br/>SageMaker]
-        VectorDB[Vector Database<br/>OpenSearch]
-    end
-    
-    subgraph "Data Layer"
-        PostgreSQL[(PostgreSQL<br/>Patient Records)]
-        MongoDB[(MongoDB<br/>Unstructured Data)]
-        S3[(S3<br/>Documents & Audio)]
-        Redis[(Redis<br/>Cache & Sessions)]
-    end
-    
-    subgraph "Integration Layer"
-        ABDM[ABDM Integration<br/>Health Record Sync]
-        Telecom[Telecom Gateway<br/>IVR Provider]
-    end
-    
-    subgraph "Observability Layer"
-        Monitoring[CloudWatch<br/>Metrics & Logs]
-        BiasMonitor[Bias Monitoring<br/>Fairness Analytics]
-        AuditLog[Audit Logging<br/>Compliance Tracking]
-    end
-    
-    IVR --> APIGateway
-    Mobile --> APIGateway
-    WebApp --> APIGateway
-    MobileApp --> APIGateway
-    
-    APIGateway --> VoiceService
-    APIGateway --> TranslationService
-    APIGateway --> SymptomService
-    APIGateway --> RiskService
-    APIGateway --> TriageService
-    APIGateway --> SOAPService
-    APIGateway --> OCRService
-    APIGateway --> DocumentQA
-    APIGateway --> SuggestionService
-    
-    VoiceService --> Bedrock
-    TranslationService --> CustomModels
-    SymptomService --> Bedrock
-    RiskService --> CustomModels
-    SafetyService --> Bedrock
-    SOAPService --> Bedrock
-    OCRService --> Bedrock
-    DocumentQA --> VectorDB
-    SuggestionService --> Bedrock
-    
-    RiskService --> SafetyService
-    RiskService --> NotificationService
-    
-    VoiceService --> S3
-    OCRService --> S3
-    
-    SymptomService --> PostgreSQL
-    TriageService --> PostgreSQL
-    TriageService --> Redis
-    SOAPService --> PostgreSQL
-    DocumentQA --> MongoDB
-    
-    NotificationService --> Telecom
-    SOAPService --> ABDM
-    
-    VoiceService --> Monitoring
-    RiskService --> BiasMonitor
-    SafetyService --> AuditLog
 ```
-
+┌─────────────────────────────────────────────────────────────────────┐
+│                         SwastSetu AI System                          │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                       │
+│  ┌──────────────────────┐         ┌──────────────────────┐         │
+│  │      Mode A          │         │      Mode B          │         │
+│  │  Patient Interface   │         │  Provider Interface  │         │
+│  │  (IVR + Voice)       │         │  (Web + Mobile)      │         │
+│  └──────────┬───────────┘         └──────────┬───────────┘         │
+│             │                                 │                      │
+│             └─────────────┬───────────────────┘                      │
+│                           │                                          │
+│              ┌────────────▼────────────┐                            │
+│              │   API Gateway Layer     │                            │
+│              │  (Authentication/Rate   │                            │
+│              │   Limiting/Routing)     │                            │
+│              └────────────┬────────────┘                            │
+│                           │                                          │
+│       ┌───────────────┼───────────────┬──────────────────┐         │
+│       │               │               │                  │         │
+│  ┌────▼─────┐  ┌─────▼──────┐  ┌────▼──────┐  ┌───────▼──────┐  │
+│  │ Patient  │  │  Clinical  │  │   AI      │  │  Integration │  │
+│  │ Service  │  │  Service   │  │  Service  │  │   Service    │  │
+│  └────┬─────┘  └─────┬──────┘  └────┬──────┘  └───────┬──────┘  │
+│       │              │               │                  │         │
+│       └──────────────┼───────────────┼──────────────────┘         │
+│                      │               │                            │
+│              ┌───────▼───────────────▼────────┐                  │
+│              │   Data Access Layer            │                  │
+│              │  (Repository Pattern)          │                  │
+│              └───────┬────────────────────────┘                  │
+│                      │                                            │
+│       ┌──────────────┼──────────────┬─────────────┐             │
+│       │              │              │             │             │
+│  ┌────▼─────┐  ┌────▼─────┐  ┌────▼─────┐  ┌───▼──────┐      │
+│  │ Patient  │  │ Clinical │  │  Audit   │  │  Cache   │      │
+│  │   DB     │  │   DB     │  │   DB     │  │  (Redis) │      │
+│  └──────────┘  └──────────┘  └──────────┘  └──────────┘      │
+│                                                                 │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │         External Integrations                           │  │
+│  │  - AWS Bedrock (AI Models)                             │  │
+│  │  - ABDM APIs (Health Records)                          │  │
+│  │  - Telecom Gateway (IVR)                               │  │
+│  │  - SMS/Notification Services                           │  │
+│  └─────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ### Technology Stack
 
-**Frontend Technologies:**
-- **Mode A (Patient)**: IVR system using Twilio/Exotel for Indian telecom integration
-- **Mode B (Provider)**: React.js with TypeScript for web application, React Native for mobile app
-- **UI Framework**: Material-UI with custom healthcare-focused components
-- **State Management**: Redux Toolkit with RTK Query for API integration
-- **Offline Support**: IndexedDB for local data caching, service workers for PWA capabilities
+**Frontend:**
+- Mode A: IVR system with DTMF fallback
+- Mode B Web: React 18+ with TypeScript, Material-UI
+- Mode B Mobile: React Native for iOS/Android
 
-**Backend Technologies:**
-- **API Layer**: Node.js with Express.js for high-concurrency handling
-- **Microservices**: Python FastAPI for AI/ML services (better ML library ecosystem)
-- **Authentication**: AWS Cognito with multi-factor authentication
-- **API Gateway**: AWS API Gateway with rate limiting and request validation
-- **Message Queue**: AWS SQS for asynchronous processing, SNS for pub/sub notifications
+**Backend:**
+- Runtime: Node.js 20+ with TypeScript
+- Framework: NestJS for microservices architecture
+- API: GraphQL for Mode B, REST for Mode A and integrations
+- Authentication: OAuth 2.0 with JWT tokens
 
-**AI/ML Technologies:**
-- **Foundation Models**: AWS Bedrock (Claude 3.5 Sonnet for reasoning, Titan for embeddings)
-- **Speech Recognition**: OpenAI Whisper (large-v3 model) fine-tuned for Indian accents
-- **Translation**: IndicTrans2 (AI4Bharat) for Indian language translation
-- **Custom ML Models**: 
-  - Risk Classification: XGBoost ensemble with SHAP explainability
-  - Symptom NER: BioBERT fine-tuned on Indian medical terminology
-  - OCR: AWS Textract with custom post-processing for Indian lab formats
-- **Vector Database**: AWS OpenSearch with k-NN plugin for document QA
-- **Model Training**: AWS SageMaker for custom model training and deployment
+**AI/ML:**
+- Platform: AWS Bedrock
+- Models: Claude 3 for NLP, Whisper for speech-to-text
+- Translation: IndicTrans2 for Indian languages
+- Risk Classification: Custom fine-tuned model on medical data
 
 **Data Storage:**
-- **Relational Database**: Amazon RDS PostgreSQL 15 with Multi-AZ deployment
-  - Patient demographics, visit records, SOAP notes, triage queue
-- **Document Store**: Amazon DocumentDB (MongoDB-compatible) for unstructured data
-  - Lab reports, medical documents, conversation transcripts
-- **Object Storage**: Amazon S3 with lifecycle policies
-  - Audio recordings, scanned documents, model artifacts
-- **Cache Layer**: Amazon ElastiCache (Redis) for session management and real-time data
-- **Data Warehouse**: Amazon Redshift for analytics and reporting
+- Primary Database: PostgreSQL 15+ with TimescaleDB extension
+- Document Store: MongoDB for unstructured medical documents
+- Cache: Redis 7+ for session management and performance
+- Object Storage: AWS S3 for audio recordings, images, documents
 
 **Infrastructure:**
-- **Cloud Provider**: AWS (Mumbai and Hyderabad regions for data residency)
-- **Container Orchestration**: Amazon ECS with Fargate for serverless containers
-- **Load Balancing**: Application Load Balancer with health checks
-- **CDN**: Amazon CloudFront for static asset delivery
-- **DNS**: Amazon Route 53 with health-based routing
-- **Secrets Management**: AWS Secrets Manager with automatic rotation
-- **Encryption**: AWS KMS for key management, CloudHSM for PII encryption
+- Cloud: AWS (multi-region deployment)
+- Containers: Docker with Kubernetes (EKS)
+- Message Queue: AWS SQS for async processing
+- CDN: CloudFront for static assets
+- Monitoring: CloudWatch, Prometheus, Grafana
 
-**Observability & Security:**
-- **Monitoring**: Amazon CloudWatch with custom metrics and dashboards
-- **Logging**: CloudWatch Logs with structured JSON logging
-- **Tracing**: AWS X-Ray for distributed tracing
-- **Security**: AWS WAF, AWS Shield for DDoS protection, GuardDuty for threat detection
-- **Compliance**: AWS Config for compliance monitoring, CloudTrail for audit logging
-- **Bias Monitoring**: Custom Python service using Fairlearn and AIF360 libraries
-
-**Integration:**
-- **ABDM**: REST API integration with OAuth 2.0 authentication
-- **Telecom**: Twilio/Exotel SDK for IVR, SMS, and voice calls
-- **Payment**: (Future) Razorpay/Paytm for consultation fees
+**Security:**
+- Encryption: AES-256-GCM at rest, TLS 1.3 in transit
+- Key Management: AWS KMS with HSM
+- Secrets: AWS Secrets Manager
+- WAF: AWS WAF for DDoS protection
 
 
-### Deployment Architecture
+## Component Design
 
-**Multi-Region Active-Active Deployment:**
-
-```mermaid
-graph TB
-    subgraph "User Traffic"
-        Users[Users<br/>Patients & Providers]
-    end
-    
-    subgraph "Global Layer"
-        Route53[Route 53<br/>Geo-based Routing]
-        CloudFront[CloudFront CDN<br/>Static Assets]
-    end
-    
-    subgraph "Mumbai Region - Primary"
-        ALB_MUM[Application Load Balancer]
-        ECS_MUM[ECS Fargate Cluster<br/>Auto-scaling]
-        RDS_MUM[(RDS PostgreSQL<br/>Primary)]
-        Redis_MUM[(ElastiCache Redis)]
-        S3_MUM[(S3 Bucket)]
-    end
-    
-    subgraph "Hyderabad Region - Secondary"
-        ALB_HYD[Application Load Balancer]
-        ECS_HYD[ECS Fargate Cluster<br/>Auto-scaling]
-        RDS_HYD[(RDS PostgreSQL<br/>Read Replica)]
-        Redis_HYD[(ElastiCache Redis)]
-        S3_HYD[(S3 Bucket)]
-    end
-    
-    subgraph "Shared Services"
-        Bedrock[AWS Bedrock<br/>Multi-region]
-        SageMaker[SageMaker Endpoints<br/>Multi-region]
-        Cognito[Cognito User Pool<br/>Global]
-    end
-    
-    Users --> Route53
-    Route53 --> CloudFront
-    Route53 --> ALB_MUM
-    Route53 --> ALB_HYD
-    
-    ALB_MUM --> ECS_MUM
-    ALB_HYD --> ECS_HYD
-    
-    ECS_MUM --> RDS_MUM
-    ECS_MUM --> Redis_MUM
-    ECS_MUM --> S3_MUM
-    ECS_MUM --> Bedrock
-    ECS_MUM --> SageMaker
-    ECS_MUM --> Cognito
-    
-    ECS_HYD --> RDS_HYD
-    ECS_HYD --> Redis_HYD
-    ECS_HYD --> S3_HYD
-    ECS_HYD --> Bedrock
-    ECS_HYD --> SageMaker
-    ECS_HYD --> Cognito
-    
-    RDS_MUM -.->|Replication| RDS_HYD
-    S3_MUM -.->|Cross-region Replication| S3_HYD
-```
-
-**Scaling Strategy:**
-- **Horizontal Scaling**: ECS services auto-scale based on CPU (>70%) and memory (>80%) utilization
-- **Database Scaling**: Read replicas for read-heavy workloads, connection pooling with PgBouncer
-- **Cache Scaling**: Redis cluster mode for distributed caching
-- **AI Model Scaling**: SageMaker auto-scaling endpoints with minimum 2 instances per model
-- **Peak Load Handling**: Pre-warming during known peak hours (8 AM - 12 PM, 6 PM - 9 PM IST)
-
-**Disaster Recovery:**
-- **RTO (Recovery Time Objective)**: 4 hours
-- **RPO (Recovery Point Objective)**: 15 minutes
-- **Backup Strategy**: 
-  - Automated daily RDS snapshots with 30-day retention
-  - Continuous S3 cross-region replication
-  - Point-in-time recovery enabled for databases
-- **Failover Strategy**: Automated DNS failover using Route 53 health checks
-
-
-## Components and Interfaces
-
-### Mode A: Patient-Facing Components
-
-#### 1. IVR Service
+### 1. Patient Service (Mode A)
 
 **Responsibilities:**
-- Handle incoming toll-free calls from patients
-- Manage call flow and conversation state
-- Integrate with Voice Processor and Translation Engine
-- Provide DTMF fallback for voice recognition failures
+- Handle IVR call flow and voice interactions
+- Manage patient symptom collection and assessment
+- Execute risk classification with safety guardrails
+- Coordinate with translation and voice processing services
 
-**Key Interfaces:**
+**Key Components:**
 
+**1.1 IVR Controller**
 ```typescript
-interface IVRService {
-  // Initiate new patient call
-  handleIncomingCall(callSid: string, phoneNumber: string): Promise<CallSession>;
-  
-  // Process patient voice input
-  processVoiceInput(callSid: string, audioUrl: string): Promise<TranscriptionResult>;
-  
-  // Send voice response to patient
-  sendVoiceResponse(callSid: string, text: string, language: string): Promise<void>;
-  
-  // Handle DTMF input as fallback
-  processDTMFInput(callSid: string, digits: string): Promise<void>;
-  
-  // End call and cleanup
-  endCall(callSid: string): Promise<CallSummary>;
+interface IVRController {
+  handleIncomingCall(callId: string, phoneNumber: string): Promise<CallSession>;
+  processVoiceInput(sessionId: string, audioData: Buffer): Promise<VoiceResponse>;
+  processDTMFInput(sessionId: string, digits: string): Promise<DTMFResponse>;
+  handleLanguageSelection(sessionId: string, languageCode: string): Promise<void>;
+  endCall(sessionId: string, reason: CallEndReason): Promise<CallSummary>;
 }
 
 interface CallSession {
   sessionId: string;
+  patientId?: string;
   phoneNumber: string;
-  language: string;
-  conversationState: ConversationState;
+  language: LanguageCode;
+  state: CallState;
   startTime: Date;
+  symptoms: Symptom[];
+  conversationHistory: Message[];
 }
 
-interface TranscriptionResult {
+enum CallState {
+  LANGUAGE_SELECTION = 'language_selection',
+  CONSENT_COLLECTION = 'consent_collection',
+  SYMPTOM_COLLECTION = 'symptom_collection',
+  FOLLOW_UP_QUESTIONS = 'follow_up_questions',
+  RISK_ASSESSMENT = 'risk_assessment',
+  RECOMMENDATION = 'recommendation',
+  COMPLETED = 'completed',
+  ERROR = 'error'
+}
+```
+
+**1.2 Symptom Collector**
+```typescript
+interface SymptomCollector {
+  extractSymptoms(text: string, language: LanguageCode): Promise<Symptom[]>;
+  generateFollowUpQuestions(symptoms: Symptom[], history: MedicalHistory): Promise<Question[]>;
+  validateSymptomCompleteness(symptoms: Symptom[]): ValidationResult;
+  detectContradictions(symptoms: Symptom[]): Contradiction[];
+}
+
+interface Symptom {
+  id: string;
+  name: string;
+  severity: SeverityLevel; // 1-10 scale
+  duration: Duration;
+  onset: OnsetType; // sudden, gradual
+  location?: BodyLocation;
+  associatedSymptoms: string[];
+  aggravatingFactors?: string[];
+  relievingFactors?: string[];
+  confidence: number; // 0-1
+}
+
+interface Question {
+  id: string;
   text: string;
-  confidence: number;
-  language: string;
-  duration: number;
+  type: QuestionType; // yes_no, multiple_choice, numeric, descriptive
+  options?: string[];
+  priority: number; // 1-5, higher = more important
+  medicalRationale: string;
 }
 ```
 
-**Technology:** Twilio/Exotel SDK, Node.js Express server
-
-#### 2. Voice Processor
-
-**Responsibilities:**
-- Convert speech to text using Whisper ASR
-- Handle multiple Indian accents and dialects
-- Provide confidence scores for transcriptions
-- Support audio quality variations
-
-**Key Interfaces:**
-
+**1.3 Risk Classifier**
 ```typescript
-interface VoiceProcessor {
-  // Transcribe audio to text
-  transcribe(audioUrl: string, language: string): Promise<TranscriptionResult>;
-  
-  // Batch transcription for analytics
-  batchTranscribe(audioUrls: string[], language: string): Promise<TranscriptionResult[]>;
-  
-  // Get supported languages
-  getSupportedLanguages(): Promise<string[]>;
-}
-```
-
-**Technology:** OpenAI Whisper (large-v3), Python FastAPI, AWS S3 for audio storage
-
-#### 3. Translation Engine
-
-**Responsibilities:**
-- Translate between English and 22+ Indian languages
-- Maintain medical terminology accuracy
-- Provide translation confidence scores
-- Support bidirectional translation
-
-**Key Interfaces:**
-
-```typescript
-interface TranslationEngine {
-  // Translate text between languages
-  translate(text: string, sourceLang: string, targetLang: string): Promise<TranslationResult>;
-  
-  // Batch translation for efficiency
-  batchTranslate(texts: string[], sourceLang: string, targetLang: string): Promise<TranslationResult[]>;
-  
-  // Validate medical term translation
-  validateMedicalTranslation(text: string, sourceLang: string, targetLang: string): Promise<ValidationResult>;
-}
-
-interface TranslationResult {
-  translatedText: string;
-  confidence: number;
-  sourceLang: string;
-  targetLang: string;
-  medicalTermsDetected: string[];
-}
-```
-
-**Technology:** IndicTrans2 (AI4Bharat), Python FastAPI, custom medical terminology glossary
-
-#### 4. Symptom Assessment Service
-
-**Responsibilities:**
-- Extract medical entities from patient descriptions
-- Generate contextual follow-up questions
-- Maintain conversation context
-- Limit questions to prevent patient fatigue
-
-**Key Interfaces:**
-
-```typescript
-interface SymptomAssessmentService {
-  // Start new symptom assessment
-  startAssessment(patientId: string, initialSymptoms: string): Promise<AssessmentSession>;
-  
-  // Process patient response and generate next question
-  processResponse(sessionId: string, response: string): Promise<AssessmentStep>;
-  
-  // Complete assessment and return structured data
-  completeAssessment(sessionId: string): Promise<SymptomData>;
-  
-  // Get assessment progress
-  getProgress(sessionId: string): Promise<AssessmentProgress>;
-}
-
-interface AssessmentSession {
-  sessionId: string;
-  patientId: string;
-  startTime: Date;
-  extractedSymptoms: MedicalEntity[];
-  conversationHistory: ConversationTurn[];
-}
-
-interface AssessmentStep {
-  nextQuestion: string;
-  questionType: 'duration' | 'severity' | 'associated' | 'clarification';
-  isComplete: boolean;
-  questionsAsked: number;
-  maxQuestions: number;
-}
-
-interface SymptomData {
-  primarySymptoms: MedicalEntity[];
-  associatedSymptoms: MedicalEntity[];
-  duration: string;
-  severity: 'mild' | 'moderate' | 'severe';
-  patientHistory: string[];
-  redFlags: string[];
-}
-
-interface MedicalEntity {
-  text: string;
-  type: 'symptom' | 'condition' | 'medication' | 'body_part';
-  confidence: number;
-  normalizedTerm: string;
-}
-```
-
-**Technology:** BioBERT for NER, AWS Bedrock (Claude) for question generation, PostgreSQL for session storage
-
-
-#### 5. Risk Classification Service
-
-**Responsibilities:**
-- Classify patient cases as Low, Moderate, or High urgency
-- Provide confidence scores and explainability
-- Trigger emergency escalation for high-risk cases
-- Implement confidence gating (<60% requires human review)
-
-**Key Interfaces:**
-
-```typescript
-interface RiskClassificationService {
-  // Classify patient risk level
-  classifyRisk(symptomData: SymptomData, patientContext: PatientContext): Promise<RiskClassification>;
-  
-  // Get explanation for classification
-  explainClassification(classificationId: string): Promise<Explanation>;
-  
-  // Batch classification for analytics
-  batchClassify(cases: SymptomData[]): Promise<RiskClassification[]>;
+interface RiskClassifier {
+  classifyRisk(assessment: PatientAssessment): Promise<RiskClassification>;
+  explainClassification(classification: RiskClassification): Explanation;
+  calculateConfidence(assessment: PatientAssessment): number;
 }
 
 interface RiskClassification {
-  classificationId: string;
-  riskLevel: 'low' | 'moderate' | 'high';
-  confidence: number;
+  level: RiskLevel; // LOW, MODERATE, HIGH
+  confidence: number; // 0-1
   reasoning: string[];
-  recommendedAction: string;
-  careLevel: 'home_care' | 'phc_visit' | 'emergency';
-  nearestFacility: FacilityInfo;
+  contributingFactors: Factor[];
+  recommendedAction: RecommendedAction;
+  urgencyScore: number; // 0-100
   requiresHumanReview: boolean;
-  timestamp: Date;
 }
 
-interface PatientContext {
-  age: number;
-  gender: string;
-  location: GeoLocation;
-  medicalHistory: string[];
-  currentMedications: string[];
-  allergies: string[];
+enum RiskLevel {
+  LOW = 'low',
+  MODERATE = 'moderate',
+  HIGH = 'high'
 }
 
-interface Explanation {
-  topFactors: Array<{factor: string, importance: number}>;
-  shapValues: Record<string, number>;
-  similarCases: string[];
-  guidelines: string[];
+interface RecommendedAction {
+  type: ActionType; // home_care, phc_visit, emergency
+  timeframe: string; // "immediately", "within 2 hours", "within 24 hours"
+  nearestFacility?: HealthFacility;
+  instructions: string[];
 }
 ```
 
-**Technology:** XGBoost ensemble model, SHAP for explainability, Python FastAPI, SageMaker for model hosting
-
-#### 6. Safety Guardrail Service
-
-**Responsibilities:**
-- Block diagnoses, medication names, and prescriptions from patient-facing outputs
-- Replace prohibited content with safe guidance
-- Log all interventions for audit
-- Provide emergency action guidance without diagnosis
-
-**Key Interfaces:**
-
+**1.4 Safety Guardrail**
 ```typescript
-interface SafetyGuardrailService {
-  // Validate content before sending to patient
-  validateContent(content: string, contentType: 'risk_message' | 'guidance' | 'general'): Promise<ValidationResult>;
-  
-  // Sanitize content by removing prohibited terms
-  sanitizeContent(content: string): Promise<SanitizedContent>;
-  
-  // Check for emergency keywords
-  detectEmergencyKeywords(symptoms: string[]): Promise<EmergencyDetection>;
+interface SafetyGuardrail {
+  validateOutput(content: string, context: OutputContext): Promise<ValidationResult>;
+  blockProhibitedContent(content: string): string;
+  detectDiagnosis(text: string): DiagnosisDetection;
+  detectMedication(text: string): MedicationDetection;
+  logIntervention(intervention: SafetyIntervention): Promise<void>;
 }
 
 interface ValidationResult {
   isValid: boolean;
-  violations: Array<{type: string, text: string, position: number}>;
-  sanitizedContent: string;
-  interventionId: string;
+  blockedContent: BlockedContent[];
+  sanitizedOutput: string;
+  interventionRequired: boolean;
 }
 
-interface SanitizedContent {
+interface BlockedContent {
+  type: ProhibitedContentType; // diagnosis, medication, dosage
+  originalText: string;
+  location: TextLocation;
+  confidence: number;
+}
+
+enum ProhibitedContentType {
+  DIAGNOSIS = 'diagnosis',
+  MEDICATION = 'medication',
+  DOSAGE = 'dosage',
+  MEDICAL_PROCEDURE = 'medical_procedure'
+}
+
+interface SafetyIntervention {
+  timestamp: Date;
+  sessionId: string;
+  contentType: ProhibitedContentType;
   originalContent: string;
-  sanitizedContent: string;
-  replacements: Array<{original: string, replacement: string}>;
-  wasModified: boolean;
-}
-
-interface EmergencyDetection {
-  isEmergency: boolean;
-  keywords: string[];
-  recommendedAction: string;
-  urgencyLevel: number;
+  replacementContent: string;
+  confidence: number;
 }
 ```
 
-**Technology:** AWS Bedrock (Claude) with custom prompts, regex patterns for medical terms, PostgreSQL for audit logs
 
-
-### Mode B: Provider-Facing Components
-
-#### 7. Triage Queue Service
+### 2. Voice Processing Service
 
 **Responsibilities:**
-- Maintain prioritized patient queue ordered by risk level and wait time
-- Send real-time notifications for high-urgency cases
-- Update queue status as doctors handle cases
-- Support filtering and search
+- Convert speech to text using Whisper/ASR
+- Handle audio quality issues and noise reduction
+- Support 22+ Indian languages with accent variations
+- Provide confidence scoring for transcriptions
 
-**Key Interfaces:**
+**Key Components:**
 
+**2.1 Speech-to-Text Engine**
 ```typescript
-interface TriageQueueService {
-  // Add patient to triage queue
-  addToQueue(patientId: string, riskClassification: RiskClassification): Promise<QueueEntry>;
-  
-  // Get current queue for a facility
-  getQueue(facilityId: string, filters?: QueueFilters): Promise<QueueEntry[]>;
-  
-  // Assign patient to doctor
-  assignPatient(queueEntryId: string, doctorId: string): Promise<void>;
-  
-  // Update queue entry status
-  updateStatus(queueEntryId: string, status: QueueStatus): Promise<void>;
-  
-  // Send notification for high-urgency case
-  notifyHighUrgency(queueEntryId: string): Promise<void>;
-  
-  // Get queue statistics
-  getQueueStats(facilityId: string): Promise<QueueStatistics>;
+interface SpeechToTextEngine {
+  transcribe(audio: AudioBuffer, language: LanguageCode): Promise<Transcription>;
+  detectLanguage(audio: AudioBuffer): Promise<LanguageDetection>;
+  enhanceAudio(audio: AudioBuffer): Promise<AudioBuffer>;
+  validateAudioQuality(audio: AudioBuffer): AudioQualityMetrics;
 }
 
-interface QueueEntry {
+interface Transcription {
+  text: string;
+  confidence: number;
+  language: LanguageCode;
+  duration: number; // milliseconds
+  alternatives?: TranscriptionAlternative[];
+  wordTimestamps?: WordTimestamp[];
+}
+
+interface AudioQualityMetrics {
+  signalToNoiseRatio: number;
+  clarity: number; // 0-1
+  isAcceptable: boolean;
+  issues: AudioIssue[];
+}
+
+enum AudioIssue {
+  LOW_VOLUME = 'low_volume',
+  HIGH_NOISE = 'high_noise',
+  DISTORTION = 'distortion',
+  CLIPPING = 'clipping',
+  POOR_CONNECTION = 'poor_connection'
+}
+```
+
+**2.2 Text-to-Speech Engine**
+```typescript
+interface TextToSpeechEngine {
+  synthesize(text: string, language: LanguageCode, voice: VoiceProfile): Promise<AudioBuffer>;
+  getAvailableVoices(language: LanguageCode): VoiceProfile[];
+  adjustSpeechRate(audio: AudioBuffer, rate: number): Promise<AudioBuffer>;
+}
+
+interface VoiceProfile {
   id: string;
+  language: LanguageCode;
+  gender: 'male' | 'female' | 'neutral';
+  age: 'young' | 'middle' | 'senior';
+  style: 'professional' | 'friendly' | 'calm';
+}
+```
+
+### 3. Translation Service
+
+**Responsibilities:**
+- Translate between English and 22+ Indian languages
+- Maintain medical terminology accuracy
+- Handle cultural context and regional variations
+- Provide confidence scoring for translations
+
+**Key Components:**
+
+**3.1 Translation Engine**
+```typescript
+interface TranslationEngine {
+  translate(text: string, from: LanguageCode, to: LanguageCode): Promise<Translation>;
+  translateBatch(texts: string[], from: LanguageCode, to: LanguageCode): Promise<Translation[]>;
+  validateMedicalAccuracy(translation: Translation): Promise<AccuracyScore>;
+  getCulturalContext(term: string, language: LanguageCode): Promise<CulturalContext>;
+}
+
+interface Translation {
+  originalText: string;
+  translatedText: string;
+  sourceLanguage: LanguageCode;
+  targetLanguage: LanguageCode;
+  confidence: number;
+  alternatives?: string[];
+  medicalTerms: MedicalTerm[];
+  requiresReview: boolean;
+}
+
+interface MedicalTerm {
+  term: string;
+  translation: string;
+  standardTerm: string; // medical standard terminology
+  culturalVariant?: string; // regional/cultural alternative
+  confidence: number;
+}
+
+enum LanguageCode {
+  EN = 'en', // English
+  HI = 'hi', // Hindi
+  BN = 'bn', // Bengali
+  TE = 'te', // Telugu
+  MR = 'mr', // Marathi
+  TA = 'ta', // Tamil
+  GU = 'gu', // Gujarati
+  KN = 'kn', // Kannada
+  ML = 'ml', // Malayalam
+  OR = 'or', // Odia
+  PA = 'pa', // Punjabi
+  // ... additional languages
+}
+```
+
+
+### 4. Clinical Service (Mode B)
+
+**Responsibilities:**
+- Manage doctor-facing triage queue and patient records
+- Generate AI-powered SOAP notes and clinical suggestions
+- Handle patient history and longitudinal data
+- Process lab reports and medical documents
+
+**Key Components:**
+
+**4.1 Triage Queue Manager**
+```typescript
+interface TriageQueueManager {
+  getQueue(facilityId: string, filters?: QueueFilters): Promise<TriageQueue>;
+  addPatient(patient: PatientCase): Promise<void>;
+  updatePatientStatus(caseId: string, status: CaseStatus): Promise<void>;
+  notifyHighRiskCase(caseId: string): Promise<void>;
+  reorderQueue(facilityId: string): Promise<void>;
+}
+
+interface TriageQueue {
+  facilityId: string;
+  cases: PatientCase[];
+  lastUpdated: Date;
+  statistics: QueueStatistics;
+}
+
+interface PatientCase {
+  caseId: string;
   patientId: string;
   patientName: string;
   age: number;
+  gender: Gender;
+  riskLevel: RiskLevel;
+  urgencyScore: number;
   primarySymptoms: string[];
-  riskLevel: 'low' | 'moderate' | 'high';
-  confidence: number;
+  arrivalTime: Date;
   waitTime: number; // minutes
-  addedAt: Date;
-  status: QueueStatus;
-  assignedDoctorId?: string;
+  status: CaseStatus;
+  assignedDoctor?: string;
 }
 
-type QueueStatus = 'waiting' | 'in_progress' | 'completed' | 'escalated';
-
-interface QueueFilters {
-  riskLevel?: 'low' | 'moderate' | 'high';
-  minWaitTime?: number;
-  assignedToMe?: boolean;
+enum CaseStatus {
+  PENDING = 'pending',
+  IN_PROGRESS = 'in_progress',
+  COMPLETED = 'completed',
+  ESCALATED = 'escalated',
+  CANCELLED = 'cancelled'
 }
 
 interface QueueStatistics {
-  totalWaiting: number;
-  highUrgency: number;
-  moderateUrgency: number;
-  lowUrgency: number;
+  totalCases: number;
+  highRiskCount: number;
+  moderateRiskCount: number;
+  lowRiskCount: number;
   averageWaitTime: number;
   longestWaitTime: number;
 }
 ```
 
-**Technology:** Redis for real-time queue management, PostgreSQL for persistence, WebSocket for real-time updates
-
-#### 8. SOAP Generation Service
-
-**Responsibilities:**
-- Generate structured SOAP notes from consultation data
-- Populate Subjective section from patient symptoms
-- Allow doctor input for Objective section
-- Suggest Assessment and Plan with AI
-- Support doctor editing and approval
-
-**Key Interfaces:**
-
+**4.2 SOAP Note Generator**
 ```typescript
-interface SOAPGenerationService {
-  // Generate initial SOAP note draft
-  generateSOAPNote(consultationData: ConsultationData): Promise<SOAPNote>;
-  
-  // Update SOAP note with doctor edits
+interface SOAPNoteGenerator {
+  generateSOAPNote(consultation: Consultation): Promise<SOAPNote>;
   updateSOAPNote(noteId: string, updates: Partial<SOAPNote>): Promise<SOAPNote>;
-  
-  // Approve and finalize SOAP note
-  approveSOAPNote(noteId: string, doctorId: string): Promise<FinalizedSOAPNote>;
-  
-  // Get SOAP note history for patient
+  approveSOAPNote(noteId: string, doctorId: string): Promise<void>;
   getSOAPHistory(patientId: string): Promise<SOAPNote[]>;
-}
-
-interface ConsultationData {
-  patientId: string;
-  symptomData: SymptomData;
-  vitalSigns?: VitalSigns;
-  examinationFindings?: string;
-  doctorNotes?: string;
 }
 
 interface SOAPNote {
   id: string;
   patientId: string;
-  consultationDate: Date;
+  consultationId: string;
+  createdAt: Date;
+  createdBy: string; // doctor ID
+  status: NoteStatus;
+  
   subjective: SubjectiveSection;
   objective: ObjectiveSection;
   assessment: AssessmentSection;
   plan: PlanSection;
-  status: 'draft' | 'approved' | 'finalized';
-  aiGenerated: {
-    subjective: boolean;
-    assessment: boolean;
-    plan: boolean;
-  };
-  doctorId?: string;
-  approvedAt?: Date;
+  
+  aiGenerated: boolean;
+  doctorModified: boolean;
+  originalAIVersion?: SOAPNote; // for audit trail
 }
 
 interface SubjectiveSection {
   chiefComplaint: string;
   historyOfPresentIllness: string;
-  reviewOfSystems: string[];
-  pastMedicalHistory: string[];
-  medications: string[];
-  allergies: string[];
+  symptoms: Symptom[];
+  patientNarrative: string;
+  reviewOfSystems?: string;
+  aiGenerated: boolean;
 }
 
 interface ObjectiveSection {
   vitalSigns: VitalSigns;
-  physicalExamination: string;
+  physicalExamination: ExaminationFindings;
   labResults?: LabResult[];
+  imagingResults?: ImagingResult[];
+  aiGenerated: boolean;
 }
 
 interface AssessmentSection {
-  differentialDiagnoses: Array<{diagnosis: string, confidence: number, reasoning: string}>;
-  workingDiagnosis?: string;
-  aiSuggestions: string[];
+  differentialDiagnoses: Diagnosis[];
+  workingDiagnosis?: Diagnosis;
+  clinicalImpression: string;
+  aiGenerated: boolean;
+  aiConfidence?: number;
 }
 
 interface PlanSection {
-  medications: Array<{name: string, dosage: string, duration: string}>;
-  tests: string[];
-  referrals: string[];
-  followUp: string;
-  patientEducation: string;
-  aiSuggestions: string[];
+  medications: Medication[];
+  investigations: Investigation[];
+  procedures?: Procedure[];
+  referrals?: Referral[];
+  followUp: FollowUpPlan;
+  patientEducation: string[];
+  aiGenerated: boolean;
+  aiConfidence?: number;
 }
 
-interface VitalSigns {
-  temperature?: number;
-  bloodPressure?: {systolic: number, diastolic: number};
-  heartRate?: number;
-  respiratoryRate?: number;
-  oxygenSaturation?: number;
-  weight?: number;
-  height?: number;
+enum NoteStatus {
+  DRAFT = 'draft',
+  AI_GENERATED = 'ai_generated',
+  DOCTOR_REVIEW = 'doctor_review',
+  APPROVED = 'approved',
+  FINALIZED = 'finalized'
 }
 ```
 
-**Technology:** AWS Bedrock (Claude) for note generation, PostgreSQL for storage, React for editing interface
-
-
-#### 9. OCR Service
-
-**Responsibilities:**
-- Extract text from lab report images
-- Structure lab values with test name, result, unit, reference range
-- Flag abnormal values
-- Support common Indian lab report formats
-- Require manual verification for low-confidence extractions
-
-**Key Interfaces:**
-
+**4.3 Clinical Suggestion Engine**
 ```typescript
-interface OCRService {
-  // Process lab report image
-  processLabReport(imageUrl: string, patientId: string): Promise<LabReportResult>;
-  
-  // Batch process multiple reports
-  batchProcessReports(imageUrls: string[], patientId: string): Promise<LabReportResult[]>;
-  
-  // Verify and correct OCR results
-  verifyLabReport(reportId: string, corrections: LabValueCorrection[]): Promise<LabReportResult>;
-  
-  // Get supported lab formats
-  getSupportedFormats(): Promise<LabFormat[]>;
+interface ClinicalSuggestionEngine {
+  generateDifferentialDiagnoses(case: PatientCase): Promise<DiagnosisSuggestion[]>;
+  suggestTreatmentOptions(diagnosis: Diagnosis, patient: Patient): Promise<TreatmentSuggestion[]>;
+  suggestInvestigations(symptoms: Symptom[], history: MedicalHistory): Promise<InvestigationSuggestion[]>;
+  explainSuggestion(suggestionId: string): Promise<SuggestionExplanation>;
 }
 
-interface LabReportResult {
+interface DiagnosisSuggestion {
+  id: string;
+  diagnosis: Diagnosis;
+  probability: number;
+  confidence: number;
+  supportingEvidence: Evidence[];
+  contradictingEvidence: Evidence[];
+  guidelines: MedicalGuideline[];
+  requiresDoctorReview: boolean;
+}
+
+interface TreatmentSuggestion {
+  id: string;
+  type: TreatmentType; // medication, procedure, lifestyle
+  description: string;
+  medications?: Medication[];
+  dosageRecommendation?: string;
+  duration?: string;
+  contraindications: string[];
+  sideEffects: string[];
+  evidence: Evidence[];
+  confidence: number;
+}
+
+interface Evidence {
+  type: EvidenceType; // symptom, lab_result, history, guideline
+  description: string;
+  weight: number; // importance 0-1
+  source?: string;
+}
+
+enum EvidenceType {
+  SYMPTOM = 'symptom',
+  LAB_RESULT = 'lab_result',
+  VITAL_SIGN = 'vital_sign',
+  MEDICAL_HISTORY = 'medical_history',
+  PHYSICAL_EXAM = 'physical_exam',
+  GUIDELINE = 'guideline',
+  RESEARCH = 'research'
+}
+```
+
+
+**4.4 Patient History Manager**
+```typescript
+interface PatientHistoryManager {
+  getLongitudinalHistory(patientId: string, filters?: HistoryFilters): Promise<PatientHistory>;
+  searchHistory(patientId: string, query: HistoryQuery): Promise<HistorySearchResult[]>;
+  getTimelineVisualization(patientId: string): Promise<HealthTimeline>;
+  aggregateFromMultipleFacilities(patientId: string): Promise<UnifiedHistory>;
+}
+
+interface PatientHistory {
+  patientId: string;
+  visits: Visit[];
+  diagnoses: DiagnosisHistory[];
+  medications: MedicationHistory[];
+  labResults: LabResult[];
+  procedures: Procedure[];
+  allergies: Allergy[];
+  chronicConditions: ChronicCondition[];
+  immunizations: Immunization[];
+}
+
+interface Visit {
+  visitId: string;
+  date: Date;
+  facilityId: string;
+  facilityName: string;
+  doctorId: string;
+  doctorName: string;
+  chiefComplaint: string;
+  diagnosis: string[];
+  prescriptions: Medication[];
+  labOrders: Investigation[];
+  notes: string;
+}
+
+interface HealthTimeline {
+  patientId: string;
+  events: TimelineEvent[];
+  milestones: HealthMilestone[];
+  trends: HealthTrend[];
+}
+
+interface TimelineEvent {
+  date: Date;
+  type: EventType; // visit, diagnosis, medication, lab, procedure
+  title: string;
+  description: string;
+  severity?: SeverityLevel;
+  facility?: string;
+}
+
+interface HealthTrend {
+  metric: string; // blood_pressure, glucose, weight
+  dataPoints: DataPoint[];
+  trend: TrendDirection; // improving, stable, worsening
+  analysis: string;
+}
+```
+
+**4.5 OCR Engine**
+```typescript
+interface OCREngine {
+  processLabReport(image: Buffer): Promise<LabReportExtraction>;
+  extractStructuredData(extraction: LabReportExtraction): Promise<StructuredLabData>;
+  validateExtraction(data: StructuredLabData): Promise<ValidationResult>;
+  correctOCRErrors(data: StructuredLabData, corrections: Correction[]): Promise<StructuredLabData>;
+}
+
+interface LabReportExtraction {
+  rawText: string;
+  confidence: number;
+  detectedFormat: LabReportFormat;
+  extractedValues: ExtractedValue[];
+  requiresManualReview: boolean;
+}
+
+interface ExtractedValue {
+  testName: string;
+  result: string;
+  unit?: string;
+  referenceRange?: string;
+  flag?: AbnormalFlag; // high, low, critical
+  confidence: number;
+  boundingBox: BoundingBox;
+}
+
+interface StructuredLabData {
   reportId: string;
   patientId: string;
   reportDate: Date;
   labName: string;
-  labValues: LabValue[];
-  rawText: string;
-  confidence: number;
-  requiresVerification: boolean;
+  tests: LabTest[];
   summary: string;
-  abnormalFlags: string[];
+  abnormalFindings: AbnormalFinding[];
 }
 
-interface LabValue {
+interface LabTest {
   testName: string;
-  result: string;
+  standardCode?: string; // LOINC code
+  result: number | string;
   unit: string;
-  referenceRange: string;
+  referenceRange: ReferenceRange;
   isAbnormal: boolean;
-  confidence: number;
-  position: {x: number, y: number, width: number, height: number};
+  flag?: AbnormalFlag;
+  interpretation?: string;
 }
 
-interface LabValueCorrection {
-  testName: string;
-  correctedResult: string;
-  correctedUnit?: string;
-}
-
-interface LabFormat {
-  labName: string;
-  formatId: string;
-  supportedTests: string[];
+enum AbnormalFlag {
+  HIGH = 'high',
+  LOW = 'low',
+  CRITICAL_HIGH = 'critical_high',
+  CRITICAL_LOW = 'critical_low',
+  ABNORMAL = 'abnormal'
 }
 ```
 
-**Technology:** AWS Textract for OCR, custom Python post-processing, AWS Bedrock for summarization, S3 for image storage
-
-#### 10. Document QA Service
-
-**Responsibilities:**
-- Answer natural language questions about patient medical records
-- Search across all patient documents
-- Cite source documents and dates
-- Support English and Hindi queries
-- Provide confidence scores
-
-**Key Interfaces:**
-
+**4.6 Document QA System**
 ```typescript
-interface DocumentQAService {
-  // Ask question about patient records
-  askQuestion(patientId: string, question: string, language: string): Promise<QAResponse>;
-  
-  // Get conversation history
-  getConversationHistory(patientId: string, sessionId: string): Promise<QAConversation>;
-  
-  // Index new documents for patient
-  indexDocuments(patientId: string, documents: Document[]): Promise<void>;
-  
-  // Search documents by keyword
+interface DocumentQASystem {
+  askQuestion(patientId: string, question: string, language: LanguageCode): Promise<QAResponse>;
   searchDocuments(patientId: string, query: string): Promise<DocumentSearchResult[]>;
+  getRelevantContext(patientId: string, topic: string): Promise<ContextualInformation>;
 }
 
 interface QAResponse {
+  question: string;
   answer: string;
   confidence: number;
-  sources: Array<{
-    documentId: string;
-    documentType: string;
-    date: Date;
-    excerpt: string;
-    relevanceScore: number;
-  }>;
+  sources: DocumentSource[];
   relatedQuestions: string[];
-  responseTime: number;
+  noAnswerFound: boolean;
 }
 
-interface QAConversation {
-  sessionId: string;
-  patientId: string;
-  turns: Array<{
-    question: string;
-    answer: string;
-    timestamp: Date;
-  }>;
-}
-
-interface Document {
+interface DocumentSource {
   documentId: string;
-  type: 'soap_note' | 'lab_report' | 'prescription' | 'referral' | 'other';
-  content: string;
-  metadata: Record<string, any>;
+  documentType: DocumentType;
   date: Date;
-}
-
-interface DocumentSearchResult {
-  documentId: string;
-  type: string;
-  date: Date;
-  snippet: string;
+  excerpt: string;
   relevanceScore: number;
+  pageNumber?: number;
+}
+
+enum DocumentType {
+  SOAP_NOTE = 'soap_note',
+  LAB_REPORT = 'lab_report',
+  PRESCRIPTION = 'prescription',
+  IMAGING_REPORT = 'imaging_report',
+  DISCHARGE_SUMMARY = 'discharge_summary',
+  REFERRAL_LETTER = 'referral_letter'
 }
 ```
 
-**Technology:** AWS OpenSearch with k-NN, AWS Bedrock (Claude) for QA, Titan embeddings for vector search, MongoDB for document storage
 
-
-#### 11. Clinical Suggestion Service
+### 5. AI Service
 
 **Responsibilities:**
-- Generate differential diagnosis suggestions
-- Suggest treatment options (medications, tests, referrals)
-- Provide evidence-based reasoning with guideline references
-- Clearly label all suggestions as AI-generated
-- Allow doctor approval/rejection with feedback
+- Interface with AWS Bedrock for AI model inference
+- Manage prompt engineering and model selection
+- Handle confidence scoring and uncertainty quantification
+- Implement explainability and interpretability features
 
-**Key Interfaces:**
+**Key Components:**
 
+**5.1 AI Model Manager**
 ```typescript
-interface ClinicalSuggestionService {
-  // Generate differential diagnosis suggestions
-  generateDifferentialDiagnosis(symptomData: SymptomData, patientContext: PatientContext): Promise<DifferentialDiagnosis>;
-  
-  // Generate treatment suggestions
-  generateTreatmentSuggestions(diagnosis: string, patientContext: PatientContext): Promise<TreatmentSuggestions>;
-  
-  // Record doctor feedback on suggestions
-  recordFeedback(suggestionId: string, feedback: SuggestionFeedback): Promise<void>;
-  
-  // Get suggestion history for analytics
-  getSuggestionHistory(filters: SuggestionFilters): Promise<SuggestionHistoryEntry[]>;
+interface AIModelManager {
+  invokeModel(request: ModelRequest): Promise<ModelResponse>;
+  selectModel(task: AITask): ModelConfig;
+  monitorModelPerformance(modelId: string): Promise<PerformanceMetrics>;
+  updateModel(modelId: string, version: string): Promise<void>;
 }
 
-interface DifferentialDiagnosis {
-  suggestionId: string;
-  diagnoses: Array<{
-    condition: string;
-    probability: number;
-    supportingEvidence: string[];
-    contradictingEvidence: string[];
-    guidelines: GuidelineReference[];
-    nextSteps: string[];
-  }>;
+interface ModelRequest {
+  modelId: string;
+  prompt: string;
+  parameters: ModelParameters;
+  context?: string[];
+  maxTokens?: number;
+  temperature?: number;
+}
+
+interface ModelResponse {
+  output: string;
   confidence: number;
-  generatedAt: Date;
+  tokensUsed: number;
+  latency: number;
+  modelVersion: string;
+  metadata: Record<string, any>;
 }
 
-interface TreatmentSuggestions {
-  suggestionId: string;
-  medications: Array<{
-    name: string;
-    dosage: string;
-    duration: string;
-    indication: string;
-    contraindications: string[];
-    alternatives: string[];
-    guidelines: GuidelineReference[];
-  }>;
-  tests: Array<{
-    testName: string;
-    indication: string;
-    urgency: 'routine' | 'urgent' | 'stat';
-    expectedFindings: string[];
-  }>;
-  referrals: Array<{
-    specialty: string;
-    indication: string;
-    urgency: 'routine' | 'urgent';
-  }>;
-  lifestyle: string[];
-  followUp: string;
+interface ModelConfig {
+  modelId: string;
+  provider: 'bedrock' | 'custom';
+  modelName: string;
+  version: string;
+  capabilities: AICapability[];
+  maxContextLength: number;
+  costPerToken: number;
+}
+
+enum AITask {
+  SYMPTOM_EXTRACTION = 'symptom_extraction',
+  RISK_CLASSIFICATION = 'risk_classification',
+  SOAP_GENERATION = 'soap_generation',
+  DIFFERENTIAL_DIAGNOSIS = 'differential_diagnosis',
+  TREATMENT_SUGGESTION = 'treatment_suggestion',
+  DOCUMENT_QA = 'document_qa',
+  TRANSLATION = 'translation'
+}
+```
+
+**5.2 Explainability Engine**
+```typescript
+interface ExplainabilityEngine {
+  explainRiskClassification(classification: RiskClassification): Promise<Explanation>;
+  explainDiagnosis(diagnosis: DiagnosisSuggestion): Promise<Explanation>;
+  generateFeatureAttribution(input: any, output: any): Promise<FeatureAttribution>;
+  generateCounterfactual(input: any, output: any): Promise<Counterfactual>;
+}
+
+interface Explanation {
+  summary: string;
+  detailedReasoning: string[];
+  featureImportance: FeatureImportance[];
+  evidenceChain: Evidence[];
   confidence: number;
-  generatedAt: Date;
+  visualizations?: ExplanationVisualization[];
 }
 
-interface GuidelineReference {
+interface FeatureImportance {
+  feature: string;
+  importance: number; // 0-1
+  contribution: 'positive' | 'negative';
+  description: string;
+}
+
+interface Counterfactual {
+  originalInput: any;
+  originalOutput: any;
+  modifiedInput: any;
+  modifiedOutput: any;
+  changes: InputChange[];
+  explanation: string;
+}
+
+interface ExplanationVisualization {
+  type: 'bar_chart' | 'heatmap' | 'decision_tree' | 'attention_map';
+  data: any;
   title: string;
-  source: string;
-  url?: string;
-  relevantSection: string;
-}
-
-interface SuggestionFeedback {
-  suggestionId: string;
-  doctorId: string;
-  action: 'accepted' | 'modified' | 'rejected';
-  modifications?: string;
-  rejectionReason?: string;
-  timestamp: Date;
-}
-
-interface SuggestionFilters {
-  startDate?: Date;
-  endDate?: Date;
-  doctorId?: string;
-  action?: 'accepted' | 'modified' | 'rejected';
-}
-
-interface SuggestionHistoryEntry {
-  suggestionId: string;
-  type: 'differential' | 'treatment';
-  patientId: string;
-  doctorId: string;
-  feedback: SuggestionFeedback;
-  timestamp: Date;
+  description: string;
 }
 ```
 
-**Technology:** AWS Bedrock (Claude) with medical knowledge base, PubMed API for guidelines, PostgreSQL for feedback storage
-
-#### 12. Emergency Escalation Service
-
-**Responsibilities:**
-- Send alerts for high-risk cases within 30 seconds
-- Notify PHC, district health officer, and emergency services
-- Track acknowledgment from recipients
-- Escalate to next level if no acknowledgment in 5 minutes
-- Maintain dashboard of active emergency cases
-
-**Key Interfaces:**
-
+**5.3 Confidence Gate**
 ```typescript
-interface EmergencyEscalationService {
-  // Trigger emergency escalation
-  triggerEscalation(escalation: EmergencyEscalation): Promise<EscalationResult>;
-  
-  // Record acknowledgment from recipient
-  recordAcknowledgment(escalationId: string, recipientId: string): Promise<void>;
-  
-  // Get active emergency cases
-  getActiveEmergencies(facilityId?: string): Promise<EmergencyCase[]>;
-  
-  // Update emergency case status
-  updateEmergencyStatus(escalationId: string, status: EmergencyStatus): Promise<void>;
-  
-  // Get escalation history
-  getEscalationHistory(patientId: string): Promise<EscalationHistoryEntry[]>;
+interface ConfidenceGate {
+  evaluateConfidence(output: AIOutput): ConfidenceEvaluation;
+  shouldEscalate(evaluation: ConfidenceEvaluation): boolean;
+  routeToHuman(caseId: string, reason: EscalationReason): Promise<void>;
+  trackConfidenceMetrics(): Promise<ConfidenceMetrics>;
 }
 
-interface EmergencyEscalation {
-  patientId: string;
-  patientName: string;
-  age: number;
-  gender: string;
-  location: GeoLocation;
-  contactNumber: string;
-  symptoms: string[];
-  riskClassification: RiskClassification;
-  nearestPHC: FacilityInfo;
-  districtHealthOfficer: ContactInfo;
+interface ConfidenceEvaluation {
+  overallConfidence: number;
+  componentConfidences: Record<string, number>;
+  uncertaintyType: UncertaintyType;
+  escalationRequired: boolean;
+  escalationReason?: EscalationReason;
 }
 
-interface EscalationResult {
-  escalationId: string;
-  notificationsSent: Array<{
-    recipientType: 'phc' | 'district_officer' | 'emergency_services';
-    recipientId: string;
-    channel: 'sms' | 'phone' | 'app';
-    status: 'sent' | 'failed';
-    sentAt: Date;
-  }>;
-  escalationLevel: number;
-  nextEscalationAt?: Date;
+enum UncertaintyType {
+  ALEATORIC = 'aleatoric', // inherent data noise
+  EPISTEMIC = 'epistemic', // model knowledge gaps
+  BOTH = 'both'
 }
 
-interface EmergencyCase {
-  escalationId: string;
-  patientId: string;
-  patientName: string;
-  symptoms: string[];
-  location: GeoLocation;
-  status: EmergencyStatus;
-  acknowledgedBy: string[];
-  createdAt: Date;
-  resolvedAt?: Date;
+enum EscalationReason {
+  LOW_CONFIDENCE = 'low_confidence',
+  HIGH_RISK = 'high_risk',
+  CONTRADICTORY_EVIDENCE = 'contradictory_evidence',
+  OUT_OF_DISTRIBUTION = 'out_of_distribution',
+  SAFETY_CONCERN = 'safety_concern'
 }
 
-type EmergencyStatus = 'active' | 'acknowledged' | 'in_transit' | 'resolved' | 'escalated';
-
-interface EscalationHistoryEntry {
-  escalationId: string;
-  patientId: string;
-  triggeredAt: Date;
-  acknowledgedAt?: Date;
-  resolvedAt?: Date;
-  outcome: string;
-}
-
-interface GeoLocation {
-  latitude: number;
-  longitude: number;
-  address: string;
-  district: string;
-  state: string;
-}
-
-interface FacilityInfo {
-  facilityId: string;
-  name: string;
-  type: 'phc' | 'chc' | 'hospital';
-  location: GeoLocation;
-  contactNumber: string;
-  distance: number; // km
-  estimatedTravelTime: number; // minutes
-}
-
-interface ContactInfo {
-  name: string;
-  role: string;
-  phoneNumber: string;
-  email: string;
+interface ConfidenceMetrics {
+  averageConfidence: number;
+  escalationRate: number;
+  confidenceDistribution: Record<string, number>;
+  accuracyByConfidenceBand: Record<string, number>;
 }
 ```
 
-**Technology:** AWS SNS for notifications, Twilio for SMS/calls, WebSocket for real-time dashboard, PostgreSQL for tracking
 
-
-#### 13. ABDM Integration Service
+### 6. Integration Service
 
 **Responsibilities:**
-- Retrieve patient health records from ABDM using health ID
-- Upload consultation data to ABDM after completion
-- Support ABDM-compliant data formats (FHIR)
-- Handle sync failures with retry queue
-- Maintain audit logs for compliance
+- Integrate with ABDM for health record exchange
+- Manage emergency escalation notifications
+- Handle facility and provider management
+- Coordinate with external systems
 
-**Key Interfaces:**
+**Key Components:**
 
+**6.1 ABDM Integration**
 ```typescript
-interface ABDMIntegrationService {
-  // Retrieve patient records from ABDM
-  fetchPatientRecords(healthId: string): Promise<ABDMHealthRecord>;
-  
-  // Upload consultation to ABDM
-  uploadConsultation(consultation: ConsultationRecord): Promise<ABDMUploadResult>;
-  
-  // Check ABDM sync status
-  getSyncStatus(consultationId: string): Promise<SyncStatus>;
-  
-  // Retry failed syncs
-  retryFailedSync(consultationId: string): Promise<ABDMUploadResult>;
-  
-  // Get sync statistics
-  getSyncStatistics(facilityId: string, dateRange: DateRange): Promise<SyncStatistics>;
+interface ABDMIntegration {
+  retrieveHealthRecords(healthId: string): Promise<ABDMHealthRecord>;
+  uploadEncounterData(encounter: Encounter): Promise<ABDMUploadResult>;
+  syncPatientData(patientId: string): Promise<SyncResult>;
+  handleSyncFailure(syncId: string): Promise<void>;
+  getABDMAuditLog(patientId: string): Promise<ABDMAuditEntry[]>;
 }
 
 interface ABDMHealthRecord {
   healthId: string;
-  patientDemographics: PatientDemographics;
-  consultations: FHIREncounter[];
-  labReports: FHIRDiagnosticReport[];
-  prescriptions: FHIRMedicationRequest[];
-  immunizations: FHIRImmunization[];
-  lastUpdated: Date;
-}
-
-interface ConsultationRecord {
-  consultationId: string;
-  patientHealthId: string;
-  facilityId: string;
-  doctorId: string;
-  consultationDate: Date;
-  soapNote: SOAPNote;
-  prescriptions: Prescription[];
-  labOrders: LabOrder[];
-  followUp?: FollowUpPlan;
+  demographics: Demographics;
+  encounters: ABDMEncounter[];
+  prescriptions: ABDMPrescription[];
+  diagnosticReports: ABDMDiagnosticReport[];
+  immunizations: ABDMImmunization[];
 }
 
 interface ABDMUploadResult {
   success: boolean;
-  abdmRecordId?: string;
-  errorMessage?: string;
-  uploadedAt?: Date;
-  retryCount: number;
+  transactionId: string;
+  timestamp: Date;
+  errors?: ABDMError[];
 }
 
-interface SyncStatus {
-  consultationId: string;
-  status: 'pending' | 'in_progress' | 'completed' | 'failed';
-  lastAttempt?: Date;
-  nextRetry?: Date;
-  errorMessage?: string;
+interface SyncResult {
+  syncId: string;
+  status: SyncStatus;
+  recordsSynced: number;
+  errors: SyncError[];
+  retryScheduled?: Date;
 }
 
-interface SyncStatistics {
-  totalConsultations: number;
-  successfulSyncs: number;
-  failedSyncs: number;
-  pendingSyncs: number;
-  averageSyncTime: number;
-  syncSuccessRate: number;
-}
-
-interface DateRange {
-  startDate: Date;
-  endDate: Date;
-}
-
-// FHIR resource types (simplified)
-interface FHIREncounter {
-  resourceType: 'Encounter';
-  id: string;
-  status: string;
-  class: string;
-  subject: {reference: string};
-  period: {start: Date, end: Date};
-  reasonCode: Array<{coding: Array<{system: string, code: string, display: string}>}>;
-}
-
-interface FHIRDiagnosticReport {
-  resourceType: 'DiagnosticReport';
-  id: string;
-  status: string;
-  code: {coding: Array<{system: string, code: string, display: string}>};
-  subject: {reference: string};
-  result: Array<{reference: string}>;
-}
-
-interface FHIRMedicationRequest {
-  resourceType: 'MedicationRequest';
-  id: string;
-  status: string;
-  intent: string;
-  medicationCodeableConcept: {coding: Array<{system: string, code: string, display: string}>};
-  subject: {reference: string};
-  dosageInstruction: Array<{text: string}>;
-}
-
-interface FHIRImmunization {
-  resourceType: 'Immunization';
-  id: string;
-  status: string;
-  vaccineCode: {coding: Array<{system: string, code: string, display: string}>};
-  patient: {reference: string};
-  occurrenceDateTime: Date;
+enum SyncStatus {
+  SUCCESS = 'success',
+  PARTIAL_SUCCESS = 'partial_success',
+  FAILED = 'failed',
+  QUEUED = 'queued',
+  IN_PROGRESS = 'in_progress'
 }
 ```
 
-**Technology:** FHIR library for data transformation, REST API client for ABDM, AWS SQS for retry queue, PostgreSQL for sync tracking
+**6.2 Emergency Escalation**
+```typescript
+interface EmergencyEscalation {
+  triggerEmergency(case: PatientCase): Promise<EscalationResult>;
+  notifyRecipients(escalation: EmergencyEscalation): Promise<NotificationResult[]>;
+  trackAcknowledgment(escalationId: string): Promise<AcknowledgmentStatus>;
+  escalateToNextLevel(escalationId: string): Promise<void>;
+  getDashboard(): Promise<EmergencyDashboard>;
+}
+
+interface EscalationResult {
+  escalationId: string;
+  caseId: string;
+  timestamp: Date;
+  recipients: Recipient[];
+  channels: NotificationChannel[];
+  status: EscalationStatus;
+}
+
+interface Recipient {
+  id: string;
+  type: RecipientType; // phc, district_officer, emergency_services
+  name: string;
+  contact: ContactInfo;
+  priority: number;
+}
+
+enum RecipientType {
+  PHC = 'phc',
+  DISTRICT_OFFICER = 'district_officer',
+  EMERGENCY_SERVICES = 'emergency_services',
+  SPECIALIST = 'specialist',
+  AMBULANCE = 'ambulance'
+}
+
+interface NotificationResult {
+  recipientId: string;
+  channel: NotificationChannel;
+  status: DeliveryStatus;
+  timestamp: Date;
+  acknowledged: boolean;
+  acknowledgedAt?: Date;
+}
+
+enum NotificationChannel {
+  SMS = 'sms',
+  PHONE_CALL = 'phone_call',
+  APP_NOTIFICATION = 'app_notification',
+  EMAIL = 'email',
+  WHATSAPP = 'whatsapp'
+}
+
+interface EmergencyDashboard {
+  activeEmergencies: EmergencyCase[];
+  statistics: EmergencyStatistics;
+  responseTimeMetrics: ResponseTimeMetrics;
+}
+
+interface EmergencyCase {
+  escalationId: string;
+  patientInfo: PatientInfo;
+  symptoms: string[];
+  location: Location;
+  status: EmergencyStatus;
+  timeElapsed: number;
+  acknowledgedBy?: string[];
+}
+
+enum EmergencyStatus {
+  TRIGGERED = 'triggered',
+  ACKNOWLEDGED = 'acknowledged',
+  EN_ROUTE = 'en_route',
+  ARRIVED = 'arrived',
+  RESOLVED = 'resolved',
+  ESCALATED = 'escalated'
+}
+```
+
+**6.3 Facility Manager**
+```typescript
+interface FacilityManager {
+  getFacilities(filters: FacilityFilters): Promise<HealthFacility[]>;
+  updateFacility(facilityId: string, updates: Partial<HealthFacility>): Promise<void>;
+  findNearestFacility(location: Location, criteria: FacilityCriteria): Promise<HealthFacility>;
+  checkCapacity(facilityId: string): Promise<CapacityInfo>;
+  getProviderSchedule(providerId: string): Promise<Schedule>;
+}
+
+interface HealthFacility {
+  id: string;
+  name: string;
+  type: FacilityType;
+  location: Location;
+  contact: ContactInfo;
+  operatingHours: OperatingHours;
+  services: MedicalService[];
+  specialties: Specialty[];
+  capacity: CapacityInfo;
+  currentLoad: number;
+  providers: Provider[];
+}
+
+enum FacilityType {
+  PHC = 'phc',
+  CHC = 'chc', // Community Health Center
+  DISTRICT_HOSPITAL = 'district_hospital',
+  MEDICAL_COLLEGE = 'medical_college',
+  PRIVATE_HOSPITAL = 'private_hospital',
+  CLINIC = 'clinic'
+}
+
+interface CapacityInfo {
+  totalBeds: number;
+  availableBeds: number;
+  emergencyBeds: number;
+  icuBeds: number;
+  currentPatients: number;
+  maxCapacity: number;
+  utilizationRate: number;
+}
+
+interface Provider {
+  id: string;
+  name: string;
+  qualification: string;
+  specialty: Specialty;
+  licenseNumber: string;
+  availability: Availability;
+  languages: LanguageCode[];
+}
+```
 
 
-### Cross-Cutting Components
-
-#### 14. Authentication & Authorization Service
+### 7. Security and Compliance Service
 
 **Responsibilities:**
-- Multi-factor authentication for Mode B users
-- Role-based access control (doctors, nurses, administrators, health officers)
-- Session management with automatic timeout
-- Integration with hospital authentication systems
+- Manage authentication and authorization
+- Handle data encryption and key management
+- Maintain audit logs and compliance reporting
+- Monitor for security threats and data breaches
 
-**Key Interfaces:**
+**Key Components:**
 
+**7.1 Authentication Manager**
 ```typescript
-interface AuthenticationService {
-  // Authenticate user with credentials
-  authenticate(username: string, password: string): Promise<AuthenticationResult>;
-  
-  // Verify MFA code
-  verifyMFA(userId: string, code: string): Promise<MFAVerificationResult>;
-  
-  // Refresh access token
+interface AuthenticationManager {
+  authenticate(credentials: Credentials): Promise<AuthResult>;
+  verifyMFA(userId: string, code: string): Promise<boolean>;
   refreshToken(refreshToken: string): Promise<TokenPair>;
-  
-  // Logout and invalidate session
   logout(userId: string, sessionId: string): Promise<void>;
-  
-  // Check user permissions
-  checkPermission(userId: string, resource: string, action: string): Promise<boolean>;
+  lockAccount(userId: string, reason: string): Promise<void>;
 }
 
-interface AuthenticationResult {
+interface Credentials {
+  type: AuthType;
+  username?: string;
+  password?: string;
+  otp?: string;
+  biometric?: BiometricData;
+}
+
+enum AuthType {
+  PASSWORD = 'password',
+  OTP = 'otp',
+  BIOMETRIC = 'biometric',
+  SSO = 'sso'
+}
+
+interface AuthResult {
   success: boolean;
   userId?: string;
-  requiresMFA: boolean;
-  sessionId?: string;
-  errorMessage?: string;
-}
-
-interface MFAVerificationResult {
-  success: boolean;
   tokens?: TokenPair;
-  errorMessage?: string;
+  mfaRequired?: boolean;
+  error?: AuthError;
 }
 
 interface TokenPair {
   accessToken: string;
   refreshToken: string;
   expiresIn: number;
+  tokenType: 'Bearer';
+}
+```
+
+**7.2 Authorization Manager**
+```typescript
+interface AuthorizationManager {
+  checkPermission(userId: string, resource: string, action: Action): Promise<boolean>;
+  getUserRole(userId: string): Promise<Role>;
+  assignRole(userId: string, role: Role): Promise<void>;
+  getRolePermissions(role: Role): Promise<Permission[]>;
 }
 
-interface AuthorizationService {
-  // Get user roles
-  getUserRoles(userId: string): Promise<Role[]>;
-  
-  // Check if user has permission
-  hasPermission(userId: string, permission: Permission): Promise<boolean>;
-  
-  // Get user permissions
-  getUserPermissions(userId: string): Promise<Permission[]>;
-}
-
-interface Role {
-  roleId: string;
-  name: 'doctor' | 'nurse' | 'administrator' | 'district_officer' | 'lab_technician';
-  permissions: Permission[];
+enum Role {
+  PATIENT = 'patient',
+  DOCTOR = 'doctor',
+  NURSE = 'nurse',
+  ADMIN = 'admin',
+  DISTRICT_OFFICER = 'district_officer',
+  COMPLIANCE_OFFICER = 'compliance_officer',
+  SYSTEM_ADMIN = 'system_admin'
 }
 
 interface Permission {
   resource: string;
-  actions: Array<'read' | 'write' | 'delete' | 'approve'>;
+  actions: Action[];
+  conditions?: AccessCondition[];
+}
+
+enum Action {
+  READ = 'read',
+  WRITE = 'write',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  APPROVE = 'approve',
+  EXPORT = 'export'
+}
+
+interface AccessCondition {
+  type: ConditionType;
+  value: any;
+}
+
+enum ConditionType {
+  FACILITY_MATCH = 'facility_match',
+  TIME_RANGE = 'time_range',
+  IP_WHITELIST = 'ip_whitelist',
+  PATIENT_CONSENT = 'patient_consent'
 }
 ```
 
-**Technology:** AWS Cognito for user management, JWT for tokens, Redis for session storage
-
-#### 15. Audit Logging Service
-
-**Responsibilities:**
-- Log all patient data access with timestamp, user, and purpose
-- Log AI-generated outputs and human modifications
-- Log safety guardrail interventions
-- Maintain tamper-proof logs for 7 years
-- Support compliance reporting and audit searches
-
-**Key Interfaces:**
-
+**7.3 Encryption Manager**
 ```typescript
-interface AuditLoggingService {
-  // Log data access event
-  logDataAccess(event: DataAccessEvent): Promise<void>;
-  
-  // Log AI output event
-  logAIOutput(event: AIOutputEvent): Promise<void>;
-  
-  // Log safety intervention
-  logSafetyIntervention(event: SafetyInterventionEvent): Promise<void>;
-  
-  // Search audit logs
-  searchLogs(query: AuditQuery): Promise<AuditLogEntry[]>;
-  
-  // Generate compliance report
-  generateComplianceReport(reportType: string, dateRange: DateRange): Promise<ComplianceReport>;
-  
-  // Detect suspicious access patterns
-  detectSuspiciousActivity(): Promise<SuspiciousActivityAlert[]>;
+interface EncryptionManager {
+  encryptData(data: string, context: EncryptionContext): Promise<EncryptedData>;
+  decryptData(encrypted: EncryptedData, context: EncryptionContext): Promise<string>;
+  rotateKeys(): Promise<KeyRotationResult>;
+  encryptField(value: string, fieldType: FieldType): Promise<string>;
+  decryptField(encrypted: string, fieldType: FieldType): Promise<string>;
 }
 
-interface DataAccessEvent {
+interface EncryptedData {
+  ciphertext: string;
+  keyId: string;
+  algorithm: string;
+  iv: string;
+  tag?: string;
+}
+
+interface EncryptionContext {
+  purpose: string;
+  userId?: string;
+  resourceId?: string;
+}
+
+enum FieldType {
+  PII = 'pii',
+  PHI = 'phi',
+  SENSITIVE = 'sensitive',
+  STANDARD = 'standard'
+}
+
+interface KeyRotationResult {
+  oldKeyId: string;
+  newKeyId: string;
+  rotatedAt: Date;
+  recordsReEncrypted: number;
+}
+```
+
+**7.4 Audit Logger**
+```typescript
+interface AuditLogger {
+  logAccess(event: AccessEvent): Promise<void>;
+  logDataModification(event: ModificationEvent): Promise<void>;
+  logSecurityEvent(event: SecurityEvent): Promise<void>;
+  queryAuditLog(query: AuditQuery): Promise<AuditEntry[]>;
+  generateComplianceReport(period: DateRange): Promise<ComplianceReport>;
+}
+
+interface AccessEvent {
+  timestamp: Date;
   userId: string;
-  userRole: string;
-  patientId: string;
-  resourceType: string;
-  resourceId: string;
-  action: 'read' | 'write' | 'delete';
+  userRole: Role;
+  resource: string;
+  action: Action;
+  patientId?: string;
   purpose: string;
   ipAddress: string;
+  success: boolean;
+}
+
+interface ModificationEvent {
   timestamp: Date;
-}
-
-interface AIOutputEvent {
-  modelName: string;
-  modelVersion: string;
-  inputData: any;
-  outputData: any;
-  confidence: number;
-  humanModified: boolean;
-  modifications?: string;
-  approvedBy?: string;
-  timestamp: Date;
-}
-
-interface SafetyInterventionEvent {
-  interventionType: 'diagnosis_blocked' | 'medication_blocked' | 'prescription_blocked';
-  originalContent: string;
-  sanitizedContent: string;
-  patientId: string;
-  context: string;
-  timestamp: Date;
-}
-
-interface AuditQuery {
-  userId?: string;
-  patientId?: string;
-  resourceType?: string;
-  action?: string;
-  startDate?: Date;
-  endDate?: Date;
-  limit?: number;
-}
-
-interface AuditLogEntry {
-  logId: string;
-  eventType: string;
-  details: any;
-  timestamp: Date;
-  hash: string; // for tamper detection
-}
-
-interface ComplianceReport {
-  reportType: string;
-  dateRange: DateRange;
-  totalEvents: number;
-  eventsByType: Record<string, number>;
-  violations: any[];
-  generatedAt: Date;
-}
-
-interface SuspiciousActivityAlert {
-  alertId: string;
   userId: string;
-  pattern: string;
-  severity: 'low' | 'medium' | 'high';
-  events: AuditLogEntry[];
-  detectedAt: Date;
+  resource: string;
+  action: Action;
+  before?: any;
+  after?: any;
+  reason?: string;
+}
+
+interface SecurityEvent {
+  timestamp: Date;
+  type: SecurityEventType;
+  severity: Severity;
+  description: string;
+  userId?: string;
+  ipAddress?: string;
+  metadata: Record<string, any>;
+}
+
+enum SecurityEventType {
+  FAILED_LOGIN = 'failed_login',
+  ACCOUNT_LOCKED = 'account_locked',
+  UNAUTHORIZED_ACCESS = 'unauthorized_access',
+  DATA_BREACH_ATTEMPT = 'data_breach_attempt',
+  SUSPICIOUS_ACTIVITY = 'suspicious_activity',
+  ENCRYPTION_FAILURE = 'encryption_failure'
+}
+
+interface AuditEntry {
+  id: string;
+  timestamp: Date;
+  type: AuditType;
+  event: AccessEvent | ModificationEvent | SecurityEvent;
+  hash: string; // tamper-proof hash
+}
+
+enum AuditType {
+  ACCESS = 'access',
+  MODIFICATION = 'modification',
+  SECURITY = 'security'
 }
 ```
 
-**Technology:** AWS CloudWatch Logs with log retention, PostgreSQL for structured audit data, AWS Lambda for suspicious activity detection
 
-
-#### 16. Bias Monitoring Service
+### 8. Monitoring and Analytics Service
 
 **Responsibilities:**
-- Track AI outputs across demographic dimensions
-- Generate monthly fairness reports
-- Alert on statistical bias (>10% disparity)
-- Track emergency escalation rates across demographics
-- Support quarterly fairness audits
+- Monitor system performance and health
+- Track AI model performance and bias
+- Generate analytics and reporting dashboards
+- Alert on anomalies and issues
 
-**Key Interfaces:**
+**Key Components:**
 
+**8.1 Performance Monitor**
 ```typescript
-interface BiasMonitoringService {
-  // Record AI decision with demographic context
-  recordDecision(decision: AIDecision, demographics: Demographics): Promise<void>;
-  
-  // Generate fairness report
-  generateFairnessReport(dateRange: DateRange): Promise<FairnessReport>;
-  
-  // Check for bias in real-time
-  checkForBias(metric: string, demographics: Demographics): Promise<BiasCheckResult>;
-  
-  // Get bias alerts
-  getBiasAlerts(severity?: 'low' | 'medium' | 'high'): Promise<BiasAlert[]>;
-  
-  // Record corrective action
-  recordCorrectiveAction(alertId: string, action: CorrectiveAction): Promise<void>;
+interface PerformanceMonitor {
+  trackMetric(metric: Metric): Promise<void>;
+  getMetrics(query: MetricQuery): Promise<MetricData[]>;
+  setAlert(alert: AlertRule): Promise<void>;
+  checkThresholds(): Promise<AlertTrigger[]>;
 }
 
-interface AIDecision {
-  decisionId: string;
-  decisionType: 'risk_classification' | 'diagnosis_suggestion' | 'treatment_suggestion';
-  outcome: any;
-  confidence: number;
+interface Metric {
+  name: string;
+  value: number;
+  unit: string;
   timestamp: Date;
+  tags: Record<string, string>;
 }
 
-interface Demographics {
-  gender: 'male' | 'female' | 'other';
-  ageGroup: '18-30' | '31-50' | '51-70' | '70+';
-  language: string;
-  location: {
-    state: string;
-    district: string;
-    urban: boolean;
-  };
+interface MetricQuery {
+  metricNames: string[];
+  timeRange: DateRange;
+  aggregation: AggregationType;
+  groupBy?: string[];
+  filters?: Record<string, any>;
+}
+
+enum AggregationType {
+  AVG = 'avg',
+  SUM = 'sum',
+  MIN = 'min',
+  MAX = 'max',
+  COUNT = 'count',
+  PERCENTILE = 'percentile'
+}
+
+interface AlertRule {
+  id: string;
+  name: string;
+  metric: string;
+  condition: AlertCondition;
+  threshold: number;
+  duration: number; // seconds
+  severity: Severity;
+  recipients: string[];
+}
+
+interface AlertCondition {
+  operator: ComparisonOperator;
+  value: number;
+  aggregation: AggregationType;
+}
+
+enum ComparisonOperator {
+  GREATER_THAN = 'gt',
+  LESS_THAN = 'lt',
+  EQUALS = 'eq',
+  NOT_EQUALS = 'ne'
+}
+```
+
+**8.2 Bias Monitor**
+```typescript
+interface BiasMonitor {
+  trackAIOutput(output: AIOutput, demographics: Demographics): Promise<void>;
+  generateFairnessReport(period: DateRange): Promise<FairnessReport>;
+  detectBias(metric: string, threshold: number): Promise<BiasDetection[]>;
+  trackOutcomes(outcomes: Outcome[]): Promise<void>;
 }
 
 interface FairnessReport {
-  reportId: string;
-  dateRange: DateRange;
-  metrics: {
-    riskClassificationByGender: Record<string, number>;
-    riskClassificationByAge: Record<string, number>;
-    riskClassificationByLanguage: Record<string, number>;
-    riskClassificationByLocation: Record<string, number>;
-    emergencyEscalationByGender: Record<string, number>;
-    emergencyEscalationByAge: Record<string, number>;
-    confidenceScoreByGender: Record<string, number>;
-    confidenceScoreByAge: Record<string, number>;
-  };
-  disparities: Array<{
-    metric: string;
-    groups: string[];
-    disparity: number;
-    severity: 'low' | 'medium' | 'high';
-  }>;
-  generatedAt: Date;
+  period: DateRange;
+  metrics: FairnessMetric[];
+  biasDetected: BiasDetection[];
+  recommendations: string[];
+  complianceStatus: ComplianceStatus;
 }
 
-interface BiasCheckResult {
-  hasBias: boolean;
+interface FairnessMetric {
+  name: string;
+  overallValue: number;
+  byDemographic: Record<string, number>;
+  disparity: number; // max difference between groups
+  threshold: number;
+  passed: boolean;
+}
+
+interface BiasDetection {
+  metric: string;
+  affectedGroup: string;
   disparity: number;
   threshold: number;
-  affectedGroups: string[];
-  recommendation: string;
-}
-
-interface BiasAlert {
-  alertId: string;
-  metric: string;
-  disparity: number;
-  affectedGroups: string[];
-  severity: 'low' | 'medium' | 'high';
+  severity: Severity;
   detectedAt: Date;
-  status: 'open' | 'investigating' | 'resolved';
-  correctiveAction?: CorrectiveAction;
+  rootCause?: string;
 }
 
-interface CorrectiveAction {
-  actionType: 'data_augmentation' | 'model_retraining' | 'threshold_adjustment' | 'manual_review';
-  description: string;
-  implementedBy: string;
-  implementedAt: Date;
-  validationResults?: any;
+interface Demographics {
+  gender?: Gender;
+  ageGroup?: AgeGroup;
+  language?: LanguageCode;
+  geography?: GeographyType;
+  socioeconomicStatus?: SocioeconomicLevel;
+}
+
+enum GeographyType {
+  URBAN = 'urban',
+  RURAL = 'rural',
+  SEMI_URBAN = 'semi_urban'
+}
+
+enum AgeGroup {
+  YOUNG_ADULT = '18-30',
+  ADULT = '31-50',
+  SENIOR = '51-70',
+  ELDERLY = '70+'
 }
 ```
 
-**Technology:** Python with Fairlearn and AIF360 libraries, PostgreSQL for metrics storage, AWS Lambda for scheduled bias checks
+**8.3 Analytics Engine**
+```typescript
+interface AnalyticsEngine {
+  generateDashboard(type: DashboardType, filters: DashboardFilters): Promise<Dashboard>;
+  exportReport(reportType: ReportType, format: ExportFormat): Promise<Buffer>;
+  predictTrends(metric: string, horizon: number): Promise<TrendPrediction>;
+  identifyPatterns(data: DataSet): Promise<Pattern[]>;
+}
+
+interface Dashboard {
+  type: DashboardType;
+  widgets: Widget[];
+  lastUpdated: Date;
+  refreshInterval: number;
+}
+
+enum DashboardType {
+  SYSTEM_HEALTH = 'system_health',
+  CLINICAL_METRICS = 'clinical_metrics',
+  EMERGENCY_OVERVIEW = 'emergency_overview',
+  FACILITY_PERFORMANCE = 'facility_performance',
+  DISEASE_SURVEILLANCE = 'disease_surveillance',
+  BIAS_MONITORING = 'bias_monitoring'
+}
+
+interface Widget {
+  id: string;
+  type: WidgetType;
+  title: string;
+  data: any;
+  visualization: VisualizationType;
+}
+
+enum WidgetType {
+  METRIC = 'metric',
+  CHART = 'chart',
+  TABLE = 'table',
+  MAP = 'map',
+  ALERT = 'alert'
+}
+
+enum VisualizationType {
+  LINE_CHART = 'line_chart',
+  BAR_CHART = 'bar_chart',
+  PIE_CHART = 'pie_chart',
+  HEATMAP = 'heatmap',
+  TIMELINE = 'timeline',
+  GEOGRAPHIC_MAP = 'geographic_map'
+}
+
+interface TrendPrediction {
+  metric: string;
+  currentValue: number;
+  predictions: PredictionPoint[];
+  confidence: number;
+  methodology: string;
+}
+
+interface PredictionPoint {
+  timestamp: Date;
+  predictedValue: number;
+  confidenceInterval: [number, number];
+}
+```
 
 
 ## Data Models
 
-### Core Domain Models
+### Core Entities
 
-#### Patient
-
+**Patient**
 ```typescript
 interface Patient {
-  patientId: string; // UUID
-  healthId?: string; // ABDM Health ID
-  demographics: PatientDemographics;
-  contactInfo: ContactInfo;
-  medicalHistory: MedicalHistory;
+  id: string;
+  abdmHealthId?: string;
+  demographics: Demographics;
+  contact: ContactInfo;
+  emergencyContact: ContactInfo;
+  preferredLanguage: LanguageCode;
+  consent: ConsentRecord;
   createdAt: Date;
   updatedAt: Date;
-  consentStatus: ConsentStatus;
 }
 
-interface PatientDemographics {
+interface Demographics {
   firstName: string;
   lastName: string;
   dateOfBirth: Date;
   age: number;
-  gender: 'male' | 'female' | 'other';
-  language: string;
-  location: GeoLocation;
+  gender: Gender;
+  bloodGroup?: BloodGroup;
+  maritalStatus?: MaritalStatus;
+  occupation?: string;
+  address: Address;
+}
+
+enum Gender {
+  MALE = 'male',
+  FEMALE = 'female',
+  OTHER = 'other',
+  PREFER_NOT_TO_SAY = 'prefer_not_to_say'
+}
+
+interface Address {
+  line1: string;
+  line2?: string;
+  village?: string;
+  district: string;
+  state: string;
+  pincode: string;
+  country: string;
+  coordinates?: Coordinates;
 }
 
 interface ContactInfo {
   phoneNumber: string;
-  alternatePhoneNumber?: string;
+  alternatePhone?: string;
   email?: string;
-  address: string;
-  emergencyContact?: {
-    name: string;
-    relationship: string;
-    phoneNumber: string;
-  };
+  whatsapp?: string;
 }
 
-interface MedicalHistory {
-  chronicConditions: string[];
-  pastSurgeries: string[];
-  allergies: string[];
-  currentMedications: string[];
-  familyHistory: string[];
-  immunizations: string[];
-  lastUpdated: Date;
-}
-
-interface ConsentStatus {
-  dataCollectionConsent: boolean;
-  aiProcessingConsent: boolean;
-  abdmSharingConsent: boolean;
-  researchConsent: boolean;
-  consentDate: Date;
-  consentVersion: string;
+interface ConsentRecord {
+  dataCollection: boolean;
+  dataSharing: boolean;
+  aiProcessing: boolean;
+  abdmSync: boolean;
+  research: boolean;
+  consentedAt: Date;
+  expiresAt?: Date;
 }
 ```
 
-#### Consultation
-
+**Consultation**
 ```typescript
 interface Consultation {
-  consultationId: string; // UUID
+  id: string;
   patientId: string;
   facilityId: string;
-  doctorId?: string;
-  consultationType: 'mode_a_assessment' | 'mode_b_consultation';
-  consultationDate: Date;
-  status: 'in_progress' | 'completed' | 'cancelled';
+  doctorId: string;
+  type: ConsultationType;
+  mode: ConsultationMode;
+  startTime: Date;
+  endTime?: Date;
+  status: ConsultationStatus;
   
-  // Mode A specific
-  callSessionId?: string;
-  symptomAssessment?: SymptomAssessment;
-  riskClassification?: RiskClassification;
+  chiefComplaint: string;
+  symptoms: Symptom[];
+  vitalSigns?: VitalSigns;
+  examination?: ExaminationFindings;
   
-  // Mode B specific
+  riskAssessment?: RiskClassification;
   soapNote?: SOAPNote;
-  prescriptions?: Prescription[];
-  labOrders?: LabOrder[];
-  referrals?: Referral[];
-  followUp?: FollowUpPlan;
+  prescriptions: Medication[];
+  investigations: Investigation[];
   
-  // Common
-  duration?: number; // minutes
-  completedAt?: Date;
-  abdmSyncStatus?: SyncStatus;
-}
-
-interface SymptomAssessment {
-  sessionId: string;
-  language: string;
-  conversationTranscript: ConversationTurn[];
-  extractedSymptoms: MedicalEntity[];
-  symptomData: SymptomData;
-  assessmentDuration: number; // seconds
-  questionsAsked: number;
-}
-
-interface ConversationTurn {
-  speaker: 'patient' | 'system';
-  text: string;
-  translatedText?: string;
-  timestamp: Date;
-  audioUrl?: string;
-}
-
-interface Prescription {
-  prescriptionId: string;
-  medicationName: string;
-  dosage: string;
-  frequency: string;
-  duration: string;
-  instructions: string;
-  prescribedBy: string;
-  prescribedAt: Date;
-}
-
-interface LabOrder {
-  orderId: string;
-  testName: string;
-  indication: string;
-  urgency: 'routine' | 'urgent' | 'stat';
-  orderedBy: string;
-  orderedAt: Date;
-  status: 'ordered' | 'collected' | 'processing' | 'completed';
-  result?: LabReportResult;
-}
-
-interface Referral {
-  referralId: string;
-  specialty: string;
-  facilityName?: string;
-  indication: string;
-  urgency: 'routine' | 'urgent';
-  referredBy: string;
-  referredAt: Date;
-  status: 'pending' | 'scheduled' | 'completed';
-}
-
-interface FollowUpPlan {
-  followUpDate?: Date;
-  followUpType: 'in_person' | 'phone' | 'telemedicine';
-  instructions: string;
-  monitoringParameters: string[];
-}
-```
-
-#### Healthcare Provider
-
-```typescript
-interface HealthcareProvider {
-  providerId: string; // UUID
-  personalInfo: {
-    firstName: string;
-    lastName: string;
-    dateOfBirth: Date;
-    gender: string;
-    phoneNumber: string;
-    email: string;
-  };
-  credentials: {
-    registrationNumber: string;
-    registrationCouncil: string;
-    qualifications: string[];
-    specializations: string[];
-    yearsOfExperience: number;
-  };
-  employment: {
-    facilityId: string;
-    role: 'doctor' | 'nurse' | 'lab_technician' | 'administrator';
-    department?: string;
-    joinDate: Date;
-    status: 'active' | 'inactive' | 'on_leave';
-  };
-  availability: {
-    schedule: WeeklySchedule;
-    onCallStatus: boolean;
-    currentLoad: number; // number of active patients
-  };
-  performance: {
-    consultationsCompleted: number;
-    averageConsultationTime: number;
-    patientSatisfactionScore: number;
-    aiSuggestionAcceptanceRate: number;
-  };
+  followUp?: FollowUpPlan;
+  referral?: Referral;
+  
+  aiAssisted: boolean;
+  aiSuggestions?: AISuggestion[];
+  
   createdAt: Date;
   updatedAt: Date;
 }
 
-interface WeeklySchedule {
-  monday?: DaySchedule;
-  tuesday?: DaySchedule;
-  wednesday?: DaySchedule;
-  thursday?: DaySchedule;
-  friday?: DaySchedule;
-  saturday?: DaySchedule;
-  sunday?: DaySchedule;
+enum ConsultationType {
+  INITIAL = 'initial',
+  FOLLOW_UP = 'follow_up',
+  EMERGENCY = 'emergency',
+  ROUTINE_CHECKUP = 'routine_checkup'
 }
 
-interface DaySchedule {
-  shifts: Array<{
-    startTime: string; // HH:MM format
-    endTime: string;
-    breakTime?: {start: string, end: string};
-  }>;
+enum ConsultationMode {
+  IN_PERSON = 'in_person',
+  TELEMEDICINE = 'telemedicine',
+  IVR_ASSESSMENT = 'ivr_assessment'
+}
+
+enum ConsultationStatus {
+  SCHEDULED = 'scheduled',
+  IN_PROGRESS = 'in_progress',
+  COMPLETED = 'completed',
+  CANCELLED = 'cancelled',
+  NO_SHOW = 'no_show'
+}
+
+interface VitalSigns {
+  temperature?: number; // Celsius
+  bloodPressure?: BloodPressure;
+  heartRate?: number; // bpm
+  respiratoryRate?: number; // breaths per minute
+  oxygenSaturation?: number; // percentage
+  weight?: number; // kg
+  height?: number; // cm
+  bmi?: number;
+  measuredAt: Date;
+}
+
+interface BloodPressure {
+  systolic: number;
+  diastolic: number;
 }
 ```
 
-#### Healthcare Facility
-
+**Medication**
 ```typescript
-interface HealthcareFacility {
-  facilityId: string; // UUID
-  facilityInfo: {
-    name: string;
-    type: 'phc' | 'chc' | 'district_hospital' | 'medical_college';
-    registrationNumber: string;
-    location: GeoLocation;
-    contactInfo: {
-      phoneNumber: string;
-      email: string;
-      emergencyNumber: string;
-    };
-  };
-  services: {
-    availableServices: string[];
-    specialties: string[];
-    emergencyServices: boolean;
-    labServices: boolean;
-    pharmacyServices: boolean;
-    ambulanceServices: boolean;
-  };
-  capacity: {
-    totalBeds: number;
-    availableBeds: number;
-    opdCapacity: number;
-    currentOpdLoad: number;
-  };
-  operatingHours: {
-    regularHours: WeeklySchedule;
-    emergencyHours: '24x7' | WeeklySchedule;
-  };
-  staff: {
-    doctors: number;
-    nurses: number;
-    supportStaff: number;
-  };
-  infrastructure: {
-    hasInternet: boolean;
-    internetSpeed?: string;
-    hasPowerBackup: boolean;
-    hasComputers: number;
-  };
-  systemInfo: {
-    onboardedAt: Date;
-    systemStatus: 'active' | 'inactive' | 'maintenance';
-    lastSyncAt?: Date;
-  };
+interface Medication {
+  id: string;
+  name: string;
+  genericName?: string;
+  dosage: string;
+  route: MedicationRoute;
+  frequency: string;
+  duration: string;
+  instructions: string;
+  startDate: Date;
+  endDate?: Date;
+  prescribedBy: string;
+  indication?: string;
+  sideEffects?: string[];
+  contraindications?: string[];
+}
+
+enum MedicationRoute {
+  ORAL = 'oral',
+  TOPICAL = 'topical',
+  INJECTION = 'injection',
+  INHALATION = 'inhalation',
+  SUBLINGUAL = 'sublingual',
+  RECTAL = 'rectal'
+}
+```
+
+**Investigation**
+```typescript
+interface Investigation {
+  id: string;
+  type: InvestigationType;
+  name: string;
+  orderedBy: string;
+  orderedAt: Date;
+  status: InvestigationStatus;
+  priority: Priority;
+  indication: string;
+  results?: InvestigationResult;
+  reportUrl?: string;
+}
+
+enum InvestigationType {
+  LAB_TEST = 'lab_test',
+  IMAGING = 'imaging',
+  BIOPSY = 'biopsy',
+  ECG = 'ecg',
+  ULTRASOUND = 'ultrasound',
+  XRAY = 'xray',
+  CT_SCAN = 'ct_scan',
+  MRI = 'mri'
+}
+
+enum InvestigationStatus {
+  ORDERED = 'ordered',
+  SAMPLE_COLLECTED = 'sample_collected',
+  IN_PROGRESS = 'in_progress',
+  COMPLETED = 'completed',
+  CANCELLED = 'cancelled'
+}
+
+interface InvestigationResult {
+  completedAt: Date;
+  findings: string;
+  interpretation: string;
+  abnormalFindings: AbnormalFinding[];
+  reportedBy: string;
+}
+
+interface AbnormalFinding {
+  parameter: string;
+  value: string;
+  normalRange: string;
+  severity: Severity;
+  clinicalSignificance: string;
+}
+```
+
+**Diagnosis**
+```typescript
+interface Diagnosis {
+  id: string;
+  code: string; // ICD-10 code
+  name: string;
+  type: DiagnosisType;
+  status: DiagnosisStatus;
+  diagnosedAt: Date;
+  diagnosedBy: string;
+  confidence?: number;
+  notes?: string;
+}
+
+enum DiagnosisType {
+  PRIMARY = 'primary',
+  SECONDARY = 'secondary',
+  DIFFERENTIAL = 'differential',
+  PROVISIONAL = 'provisional',
+  CONFIRMED = 'confirmed'
+}
+
+enum DiagnosisStatus {
+  ACTIVE = 'active',
+  RESOLVED = 'resolved',
+  CHRONIC = 'chronic',
+  RULED_OUT = 'ruled_out'
 }
 ```
 
 
-### Database Schema
+## Database Schema
 
-#### PostgreSQL Schema (Relational Data)
+### PostgreSQL Tables
 
+**patients**
 ```sql
--- Patients table
 CREATE TABLE patients (
-    patient_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    health_id VARCHAR(50) UNIQUE,
-    first_name VARCHAR(100) NOT NULL,
-    last_name VARCHAR(100) NOT NULL,
-    date_of_birth DATE NOT NULL,
-    gender VARCHAR(20) NOT NULL,
-    phone_number VARCHAR(20) NOT NULL,
-    alternate_phone_number VARCHAR(20),
-    email VARCHAR(100),
-    address TEXT,
-    language VARCHAR(50) NOT NULL,
-    location_latitude DECIMAL(10, 8),
-    location_longitude DECIMAL(11, 8),
-    location_district VARCHAR(100),
-    location_state VARCHAR(100),
-    chronic_conditions TEXT[],
-    allergies TEXT[],
-    current_medications TEXT[],
-    data_collection_consent BOOLEAN DEFAULT false,
-    ai_processing_consent BOOLEAN DEFAULT false,
-    abdm_sharing_consent BOOLEAN DEFAULT false,
-    consent_date TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT valid_gender CHECK (gender IN ('male', 'female', 'other'))
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  abdm_health_id VARCHAR(50) UNIQUE,
+  first_name VARCHAR(100) NOT NULL,
+  last_name VARCHAR(100) NOT NULL,
+  date_of_birth DATE NOT NULL,
+  gender VARCHAR(20) NOT NULL,
+  blood_group VARCHAR(5),
+  phone_number VARCHAR(20) NOT NULL,
+  email VARCHAR(255),
+  preferred_language VARCHAR(5) NOT NULL,
+  address JSONB NOT NULL,
+  emergency_contact JSONB,
+  consent JSONB NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW(),
+  deleted_at TIMESTAMP
 );
 
-CREATE INDEX idx_patients_health_id ON patients(health_id);
-CREATE INDEX idx_patients_phone ON patients(phone_number);
-CREATE INDEX idx_patients_location ON patients(location_state, location_district);
+CREATE INDEX idx_patients_abdm_health_id ON patients(abdm_health_id);
+CREATE INDEX idx_patients_phone_number ON patients(phone_number);
+CREATE INDEX idx_patients_created_at ON patients(created_at);
+```
 
--- Healthcare providers table
-CREATE TABLE healthcare_providers (
-    provider_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    first_name VARCHAR(100) NOT NULL,
-    last_name VARCHAR(100) NOT NULL,
-    registration_number VARCHAR(50) UNIQUE NOT NULL,
-    role VARCHAR(50) NOT NULL,
-    specializations TEXT[],
-    facility_id UUID NOT NULL,
-    phone_number VARCHAR(20) NOT NULL,
-    email VARCHAR(100) NOT NULL,
-    status VARCHAR(20) DEFAULT 'active',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT valid_role CHECK (role IN ('doctor', 'nurse', 'lab_technician', 'administrator', 'district_officer')),
-    CONSTRAINT valid_status CHECK (status IN ('active', 'inactive', 'on_leave'))
-);
-
-CREATE INDEX idx_providers_facility ON healthcare_providers(facility_id);
-CREATE INDEX idx_providers_role ON healthcare_providers(role);
-
--- Healthcare facilities table
-CREATE TABLE healthcare_facilities (
-    facility_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name VARCHAR(200) NOT NULL,
-    type VARCHAR(50) NOT NULL,
-    registration_number VARCHAR(50) UNIQUE NOT NULL,
-    phone_number VARCHAR(20) NOT NULL,
-    emergency_number VARCHAR(20),
-    location_latitude DECIMAL(10, 8) NOT NULL,
-    location_longitude DECIMAL(11, 8) NOT NULL,
-    location_address TEXT NOT NULL,
-    location_district VARCHAR(100) NOT NULL,
-    location_state VARCHAR(100) NOT NULL,
-    available_services TEXT[],
-    emergency_services BOOLEAN DEFAULT false,
-    total_beds INTEGER,
-    available_beds INTEGER,
-    system_status VARCHAR(20) DEFAULT 'active',
-    onboarded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT valid_facility_type CHECK (type IN ('phc', 'chc', 'district_hospital', 'medical_college')),
-    CONSTRAINT valid_system_status CHECK (system_status IN ('active', 'inactive', 'maintenance'))
-);
-
-CREATE INDEX idx_facilities_location ON healthcare_facilities(location_state, location_district);
-CREATE INDEX idx_facilities_type ON healthcare_facilities(type);
-
--- Consultations table
+**consultations**
+```sql
 CREATE TABLE consultations (
-    consultation_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    patient_id UUID NOT NULL REFERENCES patients(patient_id),
-    facility_id UUID NOT NULL REFERENCES healthcare_facilities(facility_id),
-    doctor_id UUID REFERENCES healthcare_providers(provider_id),
-    consultation_type VARCHAR(50) NOT NULL,
-    consultation_date TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    status VARCHAR(20) NOT NULL DEFAULT 'in_progress',
-    call_session_id VARCHAR(100),
-    duration_minutes INTEGER,
-    completed_at TIMESTAMP,
-    abdm_sync_status VARCHAR(20),
-    abdm_record_id VARCHAR(100),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT valid_consultation_type CHECK (consultation_type IN ('mode_a_assessment', 'mode_b_consultation')),
-    CONSTRAINT valid_status CHECK (status IN ('in_progress', 'completed', 'cancelled'))
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  patient_id UUID NOT NULL REFERENCES patients(id),
+  facility_id UUID NOT NULL REFERENCES facilities(id),
+  doctor_id UUID NOT NULL REFERENCES users(id),
+  type VARCHAR(50) NOT NULL,
+  mode VARCHAR(50) NOT NULL,
+  status VARCHAR(50) NOT NULL,
+  start_time TIMESTAMP NOT NULL,
+  end_time TIMESTAMP,
+  chief_complaint TEXT NOT NULL,
+  symptoms JSONB,
+  vital_signs JSONB,
+  examination JSONB,
+  risk_assessment JSONB,
+  ai_assisted BOOLEAN DEFAULT false,
+  ai_suggestions JSONB,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
 );
 
-CREATE INDEX idx_consultations_patient ON consultations(patient_id);
-CREATE INDEX idx_consultations_facility ON consultations(facility_id);
-CREATE INDEX idx_consultations_doctor ON consultations(doctor_id);
-CREATE INDEX idx_consultations_date ON consultations(consultation_date);
+CREATE INDEX idx_consultations_patient_id ON consultations(patient_id);
+CREATE INDEX idx_consultations_facility_id ON consultations(facility_id);
+CREATE INDEX idx_consultations_doctor_id ON consultations(doctor_id);
+CREATE INDEX idx_consultations_start_time ON consultations(start_time);
+CREATE INDEX idx_consultations_status ON consultations(status);
+```
 
--- Risk classifications table
-CREATE TABLE risk_classifications (
-    classification_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    consultation_id UUID NOT NULL REFERENCES consultations(consultation_id),
-    risk_level VARCHAR(20) NOT NULL,
-    confidence DECIMAL(5, 4) NOT NULL,
-    reasoning TEXT[],
-    recommended_action TEXT NOT NULL,
-    care_level VARCHAR(50) NOT NULL,
-    requires_human_review BOOLEAN DEFAULT false,
-    reviewed_by UUID REFERENCES healthcare_providers(provider_id),
-    reviewed_at TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT valid_risk_level CHECK (risk_level IN ('low', 'moderate', 'high')),
-    CONSTRAINT valid_care_level CHECK (care_level IN ('home_care', 'phc_visit', 'emergency')),
-    CONSTRAINT valid_confidence CHECK (confidence >= 0 AND confidence <= 1)
-);
-
-CREATE INDEX idx_risk_classifications_consultation ON risk_classifications(consultation_id);
-CREATE INDEX idx_risk_classifications_level ON risk_classifications(risk_level);
-
--- SOAP notes table
+**soap_notes**
+```sql
 CREATE TABLE soap_notes (
-    note_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    consultation_id UUID NOT NULL REFERENCES consultations(consultation_id),
-    chief_complaint TEXT NOT NULL,
-    history_of_present_illness TEXT,
-    vital_signs JSONB,
-    physical_examination TEXT,
-    assessment TEXT,
-    plan TEXT,
-    ai_generated_sections TEXT[],
-    status VARCHAR(20) DEFAULT 'draft',
-    approved_by UUID REFERENCES healthcare_providers(provider_id),
-    approved_at TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT valid_status CHECK (status IN ('draft', 'approved', 'finalized'))
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  consultation_id UUID NOT NULL REFERENCES consultations(id),
+  patient_id UUID NOT NULL REFERENCES patients(id),
+  created_by UUID NOT NULL REFERENCES users(id),
+  status VARCHAR(50) NOT NULL,
+  subjective JSONB NOT NULL,
+  objective JSONB NOT NULL,
+  assessment JSONB NOT NULL,
+  plan JSONB NOT NULL,
+  ai_generated BOOLEAN DEFAULT false,
+  doctor_modified BOOLEAN DEFAULT false,
+  original_ai_version JSONB,
+  approved_at TIMESTAMP,
+  approved_by UUID REFERENCES users(id),
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
 );
 
-CREATE INDEX idx_soap_notes_consultation ON soap_notes(consultation_id);
+CREATE INDEX idx_soap_notes_consultation_id ON soap_notes(consultation_id);
+CREATE INDEX idx_soap_notes_patient_id ON soap_notes(patient_id);
+CREATE INDEX idx_soap_notes_created_by ON soap_notes(created_by);
+```
 
--- Prescriptions table
-CREATE TABLE prescriptions (
-    prescription_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    consultation_id UUID NOT NULL REFERENCES consultations(consultation_id),
-    medication_name VARCHAR(200) NOT NULL,
-    dosage VARCHAR(100) NOT NULL,
-    frequency VARCHAR(100) NOT NULL,
-    duration VARCHAR(100) NOT NULL,
-    instructions TEXT,
-    prescribed_by UUID NOT NULL REFERENCES healthcare_providers(provider_id),
-    prescribed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+**medications**
+```sql
+CREATE TABLE medications (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  consultation_id UUID NOT NULL REFERENCES consultations(id),
+  patient_id UUID NOT NULL REFERENCES patients(id),
+  name VARCHAR(255) NOT NULL,
+  generic_name VARCHAR(255),
+  dosage VARCHAR(100) NOT NULL,
+  route VARCHAR(50) NOT NULL,
+  frequency VARCHAR(100) NOT NULL,
+  duration VARCHAR(100) NOT NULL,
+  instructions TEXT,
+  start_date DATE NOT NULL,
+  end_date DATE,
+  prescribed_by UUID NOT NULL REFERENCES users(id),
+  indication TEXT,
+  side_effects JSONB,
+  contraindications JSONB,
+  created_at TIMESTAMP DEFAULT NOW()
 );
 
-CREATE INDEX idx_prescriptions_consultation ON prescriptions(consultation_id);
+CREATE INDEX idx_medications_patient_id ON medications(patient_id);
+CREATE INDEX idx_medications_consultation_id ON medications(consultation_id);
+CREATE INDEX idx_medications_start_date ON medications(start_date);
+```
 
--- Lab reports table
-CREATE TABLE lab_reports (
-    report_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    patient_id UUID NOT NULL REFERENCES patients(patient_id),
-    consultation_id UUID REFERENCES consultations(consultation_id),
-    report_date DATE NOT NULL,
-    lab_name VARCHAR(200),
-    image_url TEXT,
-    ocr_confidence DECIMAL(5, 4),
-    requires_verification BOOLEAN DEFAULT false,
-    verified_by UUID REFERENCES healthcare_providers(provider_id),
-    verified_at TIMESTAMP,
-    summary TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+**investigations**
+```sql
+CREATE TABLE investigations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  consultation_id UUID NOT NULL REFERENCES consultations(id),
+  patient_id UUID NOT NULL REFERENCES patients(id),
+  type VARCHAR(50) NOT NULL,
+  name VARCHAR(255) NOT NULL,
+  ordered_by UUID NOT NULL REFERENCES users(id),
+  ordered_at TIMESTAMP NOT NULL,
+  status VARCHAR(50) NOT NULL,
+  priority VARCHAR(20) NOT NULL,
+  indication TEXT,
+  results JSONB,
+  report_url TEXT,
+  completed_at TIMESTAMP,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
 );
 
-CREATE INDEX idx_lab_reports_patient ON lab_reports(patient_id);
-CREATE INDEX idx_lab_reports_date ON lab_reports(report_date);
+CREATE INDEX idx_investigations_patient_id ON investigations(patient_id);
+CREATE INDEX idx_investigations_consultation_id ON investigations(consultation_id);
+CREATE INDEX idx_investigations_status ON investigations(status);
+CREATE INDEX idx_investigations_ordered_at ON investigations(ordered_at);
+```
 
--- Lab values table
-CREATE TABLE lab_values (
-    value_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    report_id UUID NOT NULL REFERENCES lab_reports(report_id),
-    test_name VARCHAR(200) NOT NULL,
-    result VARCHAR(100) NOT NULL,
-    unit VARCHAR(50),
-    reference_range VARCHAR(100),
-    is_abnormal BOOLEAN DEFAULT false,
-    confidence DECIMAL(5, 4)
+**diagnoses**
+```sql
+CREATE TABLE diagnoses (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  consultation_id UUID NOT NULL REFERENCES consultations(id),
+  patient_id UUID NOT NULL REFERENCES patients(id),
+  code VARCHAR(20) NOT NULL,
+  name VARCHAR(255) NOT NULL,
+  type VARCHAR(50) NOT NULL,
+  status VARCHAR(50) NOT NULL,
+  diagnosed_at TIMESTAMP NOT NULL,
+  diagnosed_by UUID NOT NULL REFERENCES users(id),
+  confidence DECIMAL(3,2),
+  notes TEXT,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
 );
 
-CREATE INDEX idx_lab_values_report ON lab_values(report_id);
+CREATE INDEX idx_diagnoses_patient_id ON diagnoses(patient_id);
+CREATE INDEX idx_diagnoses_consultation_id ON diagnoses(consultation_id);
+CREATE INDEX idx_diagnoses_code ON diagnoses(code);
+CREATE INDEX idx_diagnoses_status ON diagnoses(status);
+```
 
--- Triage queue table
-CREATE TABLE triage_queue (
-    queue_entry_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    patient_id UUID NOT NULL REFERENCES patients(patient_id),
-    consultation_id UUID NOT NULL REFERENCES consultations(consultation_id),
-    facility_id UUID NOT NULL REFERENCES healthcare_facilities(facility_id),
-    risk_level VARCHAR(20) NOT NULL,
-    confidence DECIMAL(5, 4) NOT NULL,
-    status VARCHAR(20) DEFAULT 'waiting',
-    assigned_doctor_id UUID REFERENCES healthcare_providers(provider_id),
-    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    started_at TIMESTAMP,
-    completed_at TIMESTAMP,
-    CONSTRAINT valid_risk_level CHECK (risk_level IN ('low', 'moderate', 'high')),
-    CONSTRAINT valid_status CHECK (status IN ('waiting', 'in_progress', 'completed', 'escalated'))
+**users**
+```sql
+CREATE TABLE users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  username VARCHAR(100) UNIQUE NOT NULL,
+  email VARCHAR(255) UNIQUE NOT NULL,
+  password_hash VARCHAR(255) NOT NULL,
+  role VARCHAR(50) NOT NULL,
+  first_name VARCHAR(100) NOT NULL,
+  last_name VARCHAR(100) NOT NULL,
+  phone_number VARCHAR(20),
+  facility_id UUID REFERENCES facilities(id),
+  qualification VARCHAR(255),
+  specialty VARCHAR(100),
+  license_number VARCHAR(100),
+  languages JSONB,
+  mfa_enabled BOOLEAN DEFAULT false,
+  mfa_secret VARCHAR(255),
+  last_login TIMESTAMP,
+  account_locked BOOLEAN DEFAULT false,
+  locked_at TIMESTAMP,
+  password_changed_at TIMESTAMP,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW(),
+  deleted_at TIMESTAMP
 );
 
-CREATE INDEX idx_triage_queue_facility ON triage_queue(facility_id, status);
-CREATE INDEX idx_triage_queue_risk ON triage_queue(risk_level, added_at);
+CREATE INDEX idx_users_username ON users(username);
+CREATE INDEX idx_users_email ON users(email);
+CREATE INDEX idx_users_role ON users(role);
+CREATE INDEX idx_users_facility_id ON users(facility_id);
+```
 
--- Emergency escalations table
-CREATE TABLE emergency_escalations (
-    escalation_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    patient_id UUID NOT NULL REFERENCES patients(patient_id),
-    consultation_id UUID NOT NULL REFERENCES consultations(consultation_id),
-    risk_classification_id UUID NOT NULL REFERENCES risk_classifications(classification_id),
-    status VARCHAR(20) DEFAULT 'active',
-    escalation_level INTEGER DEFAULT 1,
-    acknowledged_by TEXT[],
-    triggered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    acknowledged_at TIMESTAMP,
-    resolved_at TIMESTAMP,
-    outcome TEXT,
-    CONSTRAINT valid_status CHECK (status IN ('active', 'acknowledged', 'in_transit', 'resolved', 'escalated'))
+**facilities**
+```sql
+CREATE TABLE facilities (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name VARCHAR(255) NOT NULL,
+  type VARCHAR(50) NOT NULL,
+  location JSONB NOT NULL,
+  contact JSONB NOT NULL,
+  operating_hours JSONB NOT NULL,
+  services JSONB,
+  specialties JSONB,
+  capacity JSONB,
+  current_load INTEGER DEFAULT 0,
+  active BOOLEAN DEFAULT true,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
 );
 
-CREATE INDEX idx_emergency_escalations_status ON emergency_escalations(status);
-CREATE INDEX idx_emergency_escalations_patient ON emergency_escalations(patient_id);
+CREATE INDEX idx_facilities_type ON facilities(type);
+CREATE INDEX idx_facilities_active ON facilities(active);
+```
 
--- Audit logs table
+**audit_logs**
+```sql
 CREATE TABLE audit_logs (
-    log_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    event_type VARCHAR(100) NOT NULL,
-    user_id UUID,
-    patient_id UUID,
-    resource_type VARCHAR(100),
-    resource_id VARCHAR(100),
-    action VARCHAR(50),
-    details JSONB,
-    ip_address INET,
-    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    hash VARCHAR(64) NOT NULL -- SHA-256 hash for tamper detection
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  timestamp TIMESTAMP NOT NULL DEFAULT NOW(),
+  type VARCHAR(50) NOT NULL,
+  user_id UUID REFERENCES users(id),
+  user_role VARCHAR(50),
+  resource VARCHAR(255) NOT NULL,
+  action VARCHAR(50) NOT NULL,
+  patient_id UUID REFERENCES patients(id),
+  purpose TEXT,
+  ip_address INET,
+  success BOOLEAN NOT NULL,
+  before_data JSONB,
+  after_data JSONB,
+  metadata JSONB,
+  hash VARCHAR(64) NOT NULL
 );
 
 CREATE INDEX idx_audit_logs_timestamp ON audit_logs(timestamp);
-CREATE INDEX idx_audit_logs_user ON audit_logs(user_id);
-CREATE INDEX idx_audit_logs_patient ON audit_logs(patient_id);
-CREATE INDEX idx_audit_logs_event_type ON audit_logs(event_type);
+CREATE INDEX idx_audit_logs_user_id ON audit_logs(user_id);
+CREATE INDEX idx_audit_logs_patient_id ON audit_logs(patient_id);
+CREATE INDEX idx_audit_logs_type ON audit_logs(type);
+CREATE INDEX idx_audit_logs_resource ON audit_logs(resource);
+```
 
--- Bias monitoring table
-CREATE TABLE bias_monitoring (
-    record_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    decision_id VARCHAR(100) NOT NULL,
-    decision_type VARCHAR(100) NOT NULL,
-    outcome JSONB NOT NULL,
-    confidence DECIMAL(5, 4),
-    patient_gender VARCHAR(20),
-    patient_age_group VARCHAR(20),
-    patient_language VARCHAR(50),
-    patient_state VARCHAR(100),
-    patient_district VARCHAR(100),
-    patient_urban BOOLEAN,
-    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+
+**call_sessions**
+```sql
+CREATE TABLE call_sessions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id VARCHAR(100) UNIQUE NOT NULL,
+  patient_id UUID REFERENCES patients(id),
+  phone_number VARCHAR(20) NOT NULL,
+  language VARCHAR(5) NOT NULL,
+  state VARCHAR(50) NOT NULL,
+  start_time TIMESTAMP NOT NULL,
+  end_time TIMESTAMP,
+  duration INTEGER,
+  symptoms JSONB,
+  conversation_history JSONB,
+  risk_classification JSONB,
+  audio_recordings JSONB,
+  call_quality_metrics JSONB,
+  created_at TIMESTAMP DEFAULT NOW()
 );
 
-CREATE INDEX idx_bias_monitoring_timestamp ON bias_monitoring(timestamp);
-CREATE INDEX idx_bias_monitoring_decision_type ON bias_monitoring(decision_type);
-CREATE INDEX idx_bias_monitoring_demographics ON bias_monitoring(patient_gender, patient_age_group, patient_language);
+CREATE INDEX idx_call_sessions_session_id ON call_sessions(session_id);
+CREATE INDEX idx_call_sessions_patient_id ON call_sessions(patient_id);
+CREATE INDEX idx_call_sessions_phone_number ON call_sessions(phone_number);
+CREATE INDEX idx_call_sessions_start_time ON call_sessions(start_time);
 ```
 
+**emergency_escalations**
+```sql
+CREATE TABLE emergency_escalations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  escalation_id VARCHAR(100) UNIQUE NOT NULL,
+  case_id UUID NOT NULL,
+  patient_id UUID NOT NULL REFERENCES patients(id),
+  consultation_id UUID REFERENCES consultations(id),
+  status VARCHAR(50) NOT NULL,
+  triggered_at TIMESTAMP NOT NULL,
+  recipients JSONB NOT NULL,
+  notifications JSONB,
+  acknowledgments JSONB,
+  resolved_at TIMESTAMP,
+  resolution_notes TEXT,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
 
-#### MongoDB Schema (Unstructured Data)
+CREATE INDEX idx_emergency_escalations_escalation_id ON emergency_escalations(escalation_id);
+CREATE INDEX idx_emergency_escalations_patient_id ON emergency_escalations(patient_id);
+CREATE INDEX idx_emergency_escalations_status ON emergency_escalations(status);
+CREATE INDEX idx_emergency_escalations_triggered_at ON emergency_escalations(triggered_at);
+```
 
+**abdm_sync_logs**
+```sql
+CREATE TABLE abdm_sync_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  sync_id VARCHAR(100) UNIQUE NOT NULL,
+  patient_id UUID NOT NULL REFERENCES patients(id),
+  consultation_id UUID REFERENCES consultations(id),
+  operation VARCHAR(50) NOT NULL,
+  status VARCHAR(50) NOT NULL,
+  transaction_id VARCHAR(100),
+  records_synced INTEGER DEFAULT 0,
+  errors JSONB,
+  retry_count INTEGER DEFAULT 0,
+  next_retry_at TIMESTAMP,
+  synced_at TIMESTAMP,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_abdm_sync_logs_sync_id ON abdm_sync_logs(sync_id);
+CREATE INDEX idx_abdm_sync_logs_patient_id ON abdm_sync_logs(patient_id);
+CREATE INDEX idx_abdm_sync_logs_status ON abdm_sync_logs(status);
+CREATE INDEX idx_abdm_sync_logs_created_at ON abdm_sync_logs(created_at);
+```
+
+### MongoDB Collections
+
+**medical_documents**
 ```javascript
-// conversations collection - stores full conversation transcripts
 {
   _id: ObjectId,
-  sessionId: String,
-  patientId: String,
-  consultationId: String,
-  language: String,
-  turns: [
-    {
-      speaker: String, // 'patient' or 'system'
-      text: String,
-      translatedText: String,
-      timestamp: Date,
-      audioUrl: String,
-      confidence: Number
-    }
-  ],
-  extractedEntities: [
-    {
-      text: String,
-      type: String,
-      confidence: Number,
-      normalizedTerm: String
-    }
-  ],
-  createdAt: Date,
-  updatedAt: Date
-}
-
-// medical_documents collection - stores various medical documents
-{
-  _id: ObjectId,
-  documentId: String,
-  patientId: String,
-  consultationId: String,
-  documentType: String, // 'soap_note', 'lab_report', 'prescription', 'referral', 'discharge_summary'
+  patientId: UUID,
+  consultationId: UUID,
+  type: String, // 'lab_report', 'prescription', 'imaging_report', etc.
+  title: String,
   content: String, // full text content
   metadata: {
-    author: String,
-    createdDate: Date,
-    facility: String,
-    tags: [String]
+    uploadedBy: UUID,
+    uploadedAt: Date,
+    fileUrl: String,
+    fileSize: Number,
+    mimeType: String,
+    ocrProcessed: Boolean,
+    ocrConfidence: Number
   },
-  embedding: [Number], // vector embedding for semantic search
+  structuredData: Object, // extracted structured data
+  embeddings: [Number], // vector embeddings for semantic search
+  tags: [String],
   createdAt: Date,
   updatedAt: Date
 }
 
-// ai_outputs collection - stores AI model outputs for analysis
+// Indexes
+db.medical_documents.createIndex({ patientId: 1, createdAt: -1 });
+db.medical_documents.createIndex({ consultationId: 1 });
+db.medical_documents.createIndex({ type: 1 });
+db.medical_documents.createIndex({ "metadata.uploadedAt": -1 });
+```
+
+**ai_model_outputs**
+```javascript
 {
   _id: ObjectId,
-  outputId: String,
-  modelName: String,
+  modelId: String,
   modelVersion: String,
-  inputData: Object,
-  outputData: Object,
+  task: String, // 'risk_classification', 'soap_generation', etc.
+  input: Object,
+  output: Object,
   confidence: Number,
   explainability: {
-    shapValues: Object,
-    topFactors: [Object],
-    reasoning: [String]
+    featureImportance: [Object],
+    reasoning: [String],
+    evidenceChain: [Object]
   },
-  humanFeedback: {
-    action: String, // 'accepted', 'modified', 'rejected'
-    modifications: String,
-    rejectionReason: String,
-    feedbackBy: String,
-    feedbackAt: Date
+  metadata: {
+    userId: UUID,
+    patientId: UUID,
+    consultationId: UUID,
+    sessionId: String,
+    latency: Number,
+    tokensUsed: Number
   },
-  timestamp: Date
+  safetyChecks: {
+    guardrailsPassed: Boolean,
+    blockedContent: [Object],
+    interventions: [Object]
+  },
+  humanReview: {
+    required: Boolean,
+    reviewed: Boolean,
+    reviewedBy: UUID,
+    reviewedAt: Date,
+    feedback: String,
+    accepted: Boolean
+  },
+  createdAt: Date
 }
 
-// safety_interventions collection - stores safety guardrail interventions
+// Indexes
+db.ai_model_outputs.createIndex({ modelId: 1, createdAt: -1 });
+db.ai_model_outputs.createIndex({ task: 1 });
+db.ai_model_outputs.createIndex({ "metadata.patientId": 1 });
+db.ai_model_outputs.createIndex({ "humanReview.required": 1, "humanReview.reviewed": 1 });
+db.ai_model_outputs.createIndex({ createdAt: -1 });
+```
+
+**bias_monitoring_data**
+```javascript
 {
   _id: ObjectId,
-  interventionId: String,
-  interventionType: String,
-  originalContent: String,
-  sanitizedContent: String,
-  violations: [
+  timestamp: Date,
+  modelId: String,
+  task: String,
+  output: Object,
+  demographics: {
+    gender: String,
+    ageGroup: String,
+    language: String,
+    geography: String,
+    socioeconomicStatus: String
+  },
+  outcome: {
+    riskLevel: String,
+    escalated: Boolean,
+    emergencyTriggered: Boolean,
+    confidence: Number
+  },
+  metadata: {
+    patientId: UUID,
+    consultationId: UUID,
+    facilityId: UUID
+  }
+}
+
+// Indexes
+db.bias_monitoring_data.createIndex({ timestamp: -1 });
+db.bias_monitoring_data.createIndex({ modelId: 1, task: 1 });
+db.bias_monitoring_data.createIndex({ "demographics.gender": 1 });
+db.bias_monitoring_data.createIndex({ "demographics.ageGroup": 1 });
+db.bias_monitoring_data.createIndex({ "demographics.language": 1 });
+db.bias_monitoring_data.createIndex({ "demographics.geography": 1 });
+```
+
+
+## API Specifications
+
+### REST API Endpoints (Mode A - Patient Service)
+
+**IVR Call Management**
+
+```
+POST /api/v1/ivr/calls
+Description: Initiate a new IVR call session
+Request Body:
+{
+  "phoneNumber": "string",
+  "callId": "string"
+}
+Response: 200 OK
+{
+  "sessionId": "string",
+  "status": "initiated",
+  "timestamp": "ISO8601"
+}
+```
+
+```
+POST /api/v1/ivr/calls/{sessionId}/voice-input
+Description: Process voice input from patient
+Request Body:
+{
+  "audioData": "base64",
+  "language": "string"
+}
+Response: 200 OK
+{
+  "transcription": "string",
+  "confidence": 0.95,
+  "response": {
+    "text": "string",
+    "audioUrl": "string"
+  },
+  "nextAction": "continue" | "end"
+}
+```
+
+```
+POST /api/v1/ivr/calls/{sessionId}/dtmf-input
+Description: Process DTMF keypad input
+Request Body:
+{
+  "digits": "string"
+}
+Response: 200 OK
+{
+  "interpretation": "string",
+  "response": {
+    "text": "string",
+    "audioUrl": "string"
+  }
+}
+```
+
+```
+POST /api/v1/ivr/calls/{sessionId}/language
+Description: Set language for call session
+Request Body:
+{
+  "languageCode": "string"
+}
+Response: 200 OK
+{
+  "language": "string",
+  "confirmed": true
+}
+```
+
+```
+POST /api/v1/ivr/calls/{sessionId}/end
+Description: End call session
+Request Body:
+{
+  "reason": "completed" | "disconnected" | "error"
+}
+Response: 200 OK
+{
+  "summary": {
+    "duration": 180,
+    "symptomsCollected": 5,
+    "riskLevel": "moderate",
+    "recommendation": "string"
+  }
+}
+```
+
+**Risk Assessment**
+
+```
+POST /api/v1/assessment/classify-risk
+Description: Classify patient risk level
+Request Body:
+{
+  "patientId": "string",
+  "symptoms": [
     {
-      type: String,
-      text: String,
-      position: Number
+      "name": "string",
+      "severity": 7,
+      "duration": "2 days",
+      "onset": "sudden"
     }
   ],
-  patientId: String,
-  consultationId: String,
-  context: String,
-  timestamp: Date
+  "demographics": {
+    "age": 45,
+    "gender": "male"
+  },
+  "medicalHistory": {}
+}
+Response: 200 OK
+{
+  "riskLevel": "high",
+  "confidence": 0.87,
+  "urgencyScore": 85,
+  "reasoning": ["string"],
+  "recommendedAction": {
+    "type": "emergency",
+    "timeframe": "immediately",
+    "instructions": ["string"]
+  },
+  "requiresHumanReview": false
 }
 ```
 
-#### Redis Data Structures (Cache & Real-time Data)
+### GraphQL API (Mode B - Clinical Service)
+
+**Schema Definition**
+
+```graphql
+type Query {
+  # Triage Queue
+  triageQueue(facilityId: ID!, filters: QueueFilters): TriageQueue!
+  patientCase(caseId: ID!): PatientCase!
+  
+  # Patient Management
+  patient(id: ID!): Patient!
+  patientHistory(patientId: ID!, filters: HistoryFilters): PatientHistory!
+  searchPatients(query: String!, limit: Int): [Patient!]!
+  
+  # Consultations
+  consultation(id: ID!): Consultation!
+  consultations(patientId: ID!, limit: Int): [Consultation!]!
+  
+  # SOAP Notes
+  soapNote(id: ID!): SOAPNote!
+  soapNotes(patientId: ID!): [SOAPNote!]!
+  
+  # Documents
+  medicalDocuments(patientId: ID!, type: DocumentType): [MedicalDocument!]!
+  documentQA(patientId: ID!, question: String!, language: LanguageCode!): QAResponse!
+  
+  # Facilities
+  facilities(filters: FacilityFilters): [Facility!]!
+  nearestFacility(location: LocationInput!, criteria: FacilityCriteria!): Facility
+  
+  # Analytics
+  dashboard(type: DashboardType!, filters: DashboardFilters): Dashboard!
+  metrics(query: MetricQuery!): [MetricData!]!
+}
+
+type Mutation {
+  # Patient Management
+  createPatient(input: CreatePatientInput!): Patient!
+  updatePatient(id: ID!, input: UpdatePatientInput!): Patient!
+  
+  # Consultations
+  startConsultation(input: StartConsultationInput!): Consultation!
+  updateConsultation(id: ID!, input: UpdateConsultationInput!): Consultation!
+  completeConsultation(id: ID!): Consultation!
+  
+  # SOAP Notes
+  generateSOAPNote(consultationId: ID!): SOAPNote!
+  updateSOAPNote(id: ID!, input: UpdateSOAPNoteInput!): SOAPNote!
+  approveSOAPNote(id: ID!): SOAPNote!
+  
+  # Prescriptions
+  addMedication(consultationId: ID!, input: MedicationInput!): Medication!
+  updateMedication(id: ID!, input: MedicationInput!): Medication!
+  
+  # Investigations
+  orderInvestigation(consultationId: ID!, input: InvestigationInput!): Investigation!
+  updateInvestigationResults(id: ID!, results: InvestigationResultInput!): Investigation!
+  
+  # Documents
+  uploadDocument(input: UploadDocumentInput!): MedicalDocument!
+  processLabReport(documentId: ID!): LabReportExtraction!
+  
+  # AI Suggestions
+  requestClinicalSuggestions(consultationId: ID!): ClinicalSuggestions!
+  acceptSuggestion(suggestionId: ID!): Boolean!
+  rejectSuggestion(suggestionId: ID!, reason: String!): Boolean!
+  
+  # Emergency
+  triggerEmergency(caseId: ID!): EmergencyEscalation!
+  acknowledgeEmergency(escalationId: ID!, userId: ID!): Boolean!
+}
+
+type Subscription {
+  # Real-time updates
+  triageQueueUpdated(facilityId: ID!): TriageQueue!
+  newHighRiskCase(facilityId: ID!): PatientCase!
+  emergencyTriggered(facilityId: ID!): EmergencyEscalation!
+  consultationUpdated(consultationId: ID!): Consultation!
+}
+
+# Types
+type TriageQueue {
+  facilityId: ID!
+  cases: [PatientCase!]!
+  statistics: QueueStatistics!
+  lastUpdated: DateTime!
+}
+
+type PatientCase {
+  caseId: ID!
+  patient: Patient!
+  riskLevel: RiskLevel!
+  urgencyScore: Int!
+  primarySymptoms: [String!]!
+  arrivalTime: DateTime!
+  waitTime: Int!
+  status: CaseStatus!
+  assignedDoctor: User
+}
+
+type Patient {
+  id: ID!
+  abdmHealthId: String
+  demographics: Demographics!
+  contact: ContactInfo!
+  preferredLanguage: LanguageCode!
+  consent: ConsentRecord!
+  history: PatientHistory
+}
+
+type PatientHistory {
+  visits: [Visit!]!
+  diagnoses: [DiagnosisHistory!]!
+  medications: [MedicationHistory!]!
+  labResults: [LabResult!]!
+  timeline: HealthTimeline!
+}
+
+type Consultation {
+  id: ID!
+  patient: Patient!
+  facility: Facility!
+  doctor: User!
+  type: ConsultationType!
+  status: ConsultationStatus!
+  startTime: DateTime!
+  endTime: DateTime
+  chiefComplaint: String!
+  symptoms: [Symptom!]!
+  vitalSigns: VitalSigns
+  riskAssessment: RiskClassification
+  soapNote: SOAPNote
+  prescriptions: [Medication!]!
+  investigations: [Investigation!]!
+  aiAssisted: Boolean!
+}
+
+type SOAPNote {
+  id: ID!
+  consultation: Consultation!
+  status: NoteStatus!
+  subjective: SubjectiveSection!
+  objective: ObjectiveSection!
+  assessment: AssessmentSection!
+  plan: PlanSection!
+  aiGenerated: Boolean!
+  doctorModified: Boolean!
+  approvedAt: DateTime
+  approvedBy: User
+}
+
+type ClinicalSuggestions {
+  differentialDiagnoses: [DiagnosisSuggestion!]!
+  treatmentOptions: [TreatmentSuggestion!]!
+  investigations: [InvestigationSuggestion!]!
+}
+
+# Enums
+enum RiskLevel {
+  LOW
+  MODERATE
+  HIGH
+}
+
+enum CaseStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  ESCALATED
+  CANCELLED
+}
+
+enum ConsultationType {
+  INITIAL
+  FOLLOW_UP
+  EMERGENCY
+  ROUTINE_CHECKUP
+}
+
+enum ConsultationStatus {
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+enum NoteStatus {
+  DRAFT
+  AI_GENERATED
+  DOCTOR_REVIEW
+  APPROVED
+  FINALIZED
+}
+
+enum LanguageCode {
+  EN
+  HI
+  BN
+  TE
+  MR
+  TA
+  GU
+  KN
+  ML
+  OR
+  PA
+}
+```
+
+
+## Security Architecture
+
+### 5-Layer Safety Framework
+
+**Layer 1: Input Validation**
+- Sanitize all user inputs to prevent injection attacks
+- Validate data types, formats, and ranges
+- Implement rate limiting to prevent abuse
+- Detect and block malicious patterns
+
+**Layer 2: AI Safety Guardrails**
+- Block diagnoses, medications, and dosages in patient-facing outputs
+- Implement content filtering using keyword matching and NLP
+- Maintain prohibited content database with medical terminology
+- Log all guardrail interventions for audit
+
+**Layer 3: Confidence Gating**
+- Require human review when AI confidence <60%
+- Escalate contradictory or uncertain cases
+- Track confidence distributions and accuracy by confidence band
+- Implement uncertainty quantification (aleatoric + epistemic)
+
+**Layer 4: Human-in-the-Loop**
+- Mandatory doctor approval for all clinical decisions
+- Allow doctors to override AI suggestions with documented reasoning
+- Collect human feedback for continuous model improvement
+- Maintain audit trail of AI suggestions vs. final decisions
+
+**Layer 5: Post-Deployment Monitoring**
+- Continuous monitoring of AI outputs for safety issues
+- Bias monitoring across demographic dimensions
+- Track adverse events and near-misses
+- Implement automated alerts for anomalies
+
+### Authentication Flow
 
 ```
-// Session data (TTL: 30 minutes)
-session:{sessionId} -> Hash {
-  userId: string,
-  role: string,
-  facilityId: string,
-  loginAt: timestamp,
-  lastActivity: timestamp
-}
-
-// Triage queue (sorted set by priority score)
-triage:facility:{facilityId} -> Sorted Set {
-  score: (riskLevel * 1000) + waitTimeMinutes,
-  member: queueEntryId
-}
-
-// Real-time queue statistics (TTL: 5 minutes)
-triage:stats:{facilityId} -> Hash {
-  totalWaiting: number,
-  highUrgency: number,
-  moderateUrgency: number,
-  lowUrgency: number,
-  averageWaitTime: number
-}
-
-// Active emergency cases (TTL: 24 hours)
-emergency:active -> Set {
-  escalationId1,
-  escalationId2,
-  ...
-}
-
-// ABDM sync queue (list for retry mechanism)
-abdm:sync:queue -> List [
-  {consultationId, retryCount, lastAttempt}
-]
-
-// Rate limiting (TTL: 1 minute)
-ratelimit:{userId}:{endpoint} -> String (counter)
-
-// Model inference cache (TTL: 1 hour)
-model:cache:{inputHash} -> String (JSON output)
+1. User Login Request
+   ↓
+2. Validate Credentials (password hash comparison)
+   ↓
+3. Check Account Status (not locked, active)
+   ↓
+4. MFA Challenge (if enabled)
+   ↓
+5. Generate JWT Access Token (15 min expiry)
+   ↓
+6. Generate Refresh Token (7 day expiry)
+   ↓
+7. Store Session in Redis
+   ↓
+8. Return Tokens to Client
+   ↓
+9. Client includes Access Token in Authorization header
+   ↓
+10. API Gateway validates token signature and expiry
+    ↓
+11. Extract user ID and role from token claims
+    ↓
+12. Check permissions for requested resource/action
+    ↓
+13. Allow or deny request
 ```
+
+### Data Encryption Strategy
+
+**At Rest:**
+- Database: AES-256-GCM encryption at column level for PII/PHI
+- Object Storage: Server-side encryption with AWS KMS
+- Backups: Separate encryption keys stored in geographically distributed HSMs
+- Key Rotation: Automated 90-day rotation with re-encryption
+
+**In Transit:**
+- TLS 1.3 with perfect forward secrecy
+- Certificate pinning for mobile apps
+- Mutual TLS for service-to-service communication
+- VPN for admin access
+
+**Key Management:**
+- AWS KMS with HSM backing for master keys
+- Envelope encryption for data encryption keys
+- Separate keys for different data classifications
+- Key access logging and monitoring
+
+### Access Control Matrix
+
+| Role | Patient Data | Clinical Notes | Prescriptions | AI Suggestions | System Config | Audit Logs |
+|------|--------------|----------------|---------------|----------------|---------------|------------|
+| Patient | Own only (R) | Own only (R) | Own only (R) | No | No | Own only (R) |
+| Doctor | Assigned (RW) | Create/Edit (RW) | Create/Edit (RW) | View/Accept (RW) | No | Own actions (R) |
+| Nurse | Assigned (R) | View only (R) | View only (R) | No | No | No |
+| Admin | All (R) | All (R) | All (R) | No | Facility (RW) | Facility (R) |
+| District Officer | District (R) | District (R) | District (R) | No | District (R) | District (R) |
+| Compliance Officer | All (R) | All (R) | All (R) | All (R) | No | All (R) |
+| System Admin | No | No | No | No | All (RW) | All (R) |
+
+R = Read, W = Write
 
