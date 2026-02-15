@@ -2553,3 +2553,494 @@ enum LanguageCode {
 
 R = Read, W = Write
 
+
+## AI/ML Architecture
+
+### Model Selection Strategy
+
+| Task | Model | Provider | Rationale |
+|------|-------|----------|-----------|
+| Symptom Extraction | Claude 3 Haiku | AWS Bedrock | Fast, cost-effective for NLP tasks |
+| Risk Classification | Custom Fine-tuned | AWS Bedrock | Domain-specific medical knowledge |
+| SOAP Generation | Claude 3 Sonnet | AWS Bedrock | High-quality structured output |
+| Differential Diagnosis | Claude 3 Opus | AWS Bedrock | Complex medical reasoning |
+| Speech-to-Text | Whisper Large v3 | AWS Bedrock | Multilingual support, high accuracy |
+| Translation | IndicTrans2 | Custom Deployment | Specialized for Indian languages |
+| Document QA | Claude 3 Sonnet | AWS Bedrock | Long context, accurate retrieval |
+| OCR | Amazon Textract | AWS | Optimized for document processing |
+
+### Prompt Engineering Framework
+
+**Risk Classification Prompt Template:**
+```
+You are a medical triage AI assistant. Analyze the patient's symptoms and classify their risk level.
+
+Patient Information:
+- Age: {age}
+- Gender: {gender}
+- Symptoms: {symptoms}
+- Duration: {duration}
+- Medical History: {history}
+
+Task: Classify risk as LOW, MODERATE, or HIGH based on:
+1. Severity of symptoms
+2. Potential for rapid deterioration
+3. Need for immediate medical attention
+
+CRITICAL SAFETY RULES:
+- DO NOT provide diagnoses
+- DO NOT recommend specific medications
+- DO NOT use medical terminology in patient-facing output
+- Focus on urgency and recommended action
+
+Output Format:
+{
+  "riskLevel": "LOW|MODERATE|HIGH",
+  "confidence": 0.0-1.0,
+  "reasoning": ["reason1", "reason2"],
+  "recommendedAction": {
+    "type": "home_care|phc_visit|emergency",
+    "timeframe": "string",
+    "instructions": ["instruction1", "instruction2"]
+  }
+}
+
+Classification:
+```
+
+**SOAP Note Generation Prompt Template:**
+```
+You are a clinical documentation AI assistant. Generate a SOAP note based on the consultation data.
+
+Consultation Data:
+- Chief Complaint: {chiefComplaint}
+- Symptoms: {symptoms}
+- Vital Signs: {vitalSigns}
+- Examination Findings: {examination}
+- Patient History: {history}
+
+Generate a structured SOAP note:
+
+SUBJECTIVE:
+- Chief complaint in patient's words
+- History of present illness
+- Review of systems
+
+OBJECTIVE:
+- Vital signs
+- Physical examination findings
+- Lab results (if available)
+
+ASSESSMENT:
+- Differential diagnoses (mark as AI-generated)
+- Clinical impression
+- Confidence level
+
+PLAN:
+- Recommended investigations
+- Treatment suggestions (mark as AI-generated)
+- Follow-up plan
+- Patient education points
+
+IMPORTANT:
+- Clearly mark all AI-generated suggestions
+- Provide evidence-based reasoning
+- Include confidence scores
+- Allow doctor to modify all sections
+
+Output as structured JSON following SOAPNote schema.
+```
+
+### Model Performance Monitoring
+
+**Metrics Tracked:**
+- Accuracy: Agreement with doctor's final decision
+- Precision/Recall: For risk classification
+- Confidence Calibration: Confidence vs. actual accuracy
+- Latency: Inference time per request
+- Token Usage: Cost optimization
+- Escalation Rate: % requiring human review
+- Bias Metrics: Performance across demographics
+
+**Monitoring Dashboard:**
+```typescript
+interface ModelMonitoringDashboard {
+  modelId: string;
+  timeRange: DateRange;
+  
+  performance: {
+    accuracy: number;
+    precision: number;
+    recall: number;
+    f1Score: number;
+    auc: number;
+  };
+  
+  calibration: {
+    expectedCalibrationError: number;
+    confidenceHistogram: HistogramData;
+    reliabilityDiagram: DiagramData;
+  };
+  
+  latency: {
+    p50: number;
+    p95: number;
+    p99: number;
+    average: number;
+  };
+  
+  costs: {
+    totalTokens: number;
+    totalCost: number;
+    costPerRequest: number;
+  };
+  
+  escalations: {
+    rate: number;
+    reasons: Record<EscalationReason, number>;
+  };
+  
+  fairness: {
+    demographicParity: Record<string, number>;
+    equalizedOdds: Record<string, number>;
+    disparities: BiasDetection[];
+  };
+}
+```
+
+### Training Data Management
+
+**Data Collection:**
+- Collect de-identified patient cases with doctor decisions
+- Maintain balanced representation across demographics
+- Include edge cases and rare conditions
+- Separate training data from production data
+
+**Data Annotation:**
+- Doctor-validated labels for supervised learning
+- Confidence scores for uncertainty quantification
+- Explanation annotations for interpretability
+- Bias annotations for fairness
+
+**Data Pipeline:**
+```
+1. Production Data Collection
+   ↓
+2. PII Anonymization
+   ↓
+3. Quality Filtering
+   ↓
+4. Demographic Balancing
+   ↓
+5. Train/Validation/Test Split (70/15/15)
+   ↓
+6. Feature Engineering
+   ↓
+7. Model Training
+   ↓
+8. Fairness Auditing
+   ↓
+9. Performance Validation
+   ↓
+10. A/B Testing in Production
+    ↓
+11. Gradual Rollout
+```
+
+### Explainability Implementation
+
+**SHAP (SHapley Additive exPlanations):**
+```typescript
+interface SHAPExplanation {
+  baseValue: number; // expected model output
+  shapValues: FeatureShapValue[];
+  prediction: number;
+  
+  topFeatures: {
+    feature: string;
+    value: any;
+    shapValue: number;
+    contribution: 'positive' | 'negative';
+  }[];
+  
+  visualization: {
+    type: 'waterfall' | 'force' | 'summary';
+    data: any;
+  };
+}
+
+interface FeatureShapValue {
+  feature: string;
+  value: any;
+  shapValue: number;
+}
+```
+
+**Attention Visualization (for NLP models):**
+```typescript
+interface AttentionVisualization {
+  tokens: string[];
+  attentionWeights: number[][]; // token x token matrix
+  highlightedTokens: {
+    token: string;
+    position: number;
+    weight: number;
+  }[];
+}
+```
+
+
+## Deployment Architecture
+
+### AWS Infrastructure
+
+**Multi-Region Deployment:**
+```
+Primary Region: ap-south-1 (Mumbai)
+Secondary Region: ap-south-2 (Hyderabad)
+DR Region: ap-southeast-1 (Singapore)
+
+Active-Active Configuration:
+- Route 53 with latency-based routing
+- Cross-region database replication
+- S3 cross-region replication for documents
+- CloudFront for global CDN
+```
+
+**Kubernetes Architecture:**
+```
+EKS Cluster Configuration:
+- Node Groups:
+  - General Purpose: t3.large (2-10 nodes, auto-scaling)
+  - Compute Optimized: c6i.xlarge (2-8 nodes, for AI inference)
+  - Memory Optimized: r6i.xlarge (2-6 nodes, for caching)
+
+Namespaces:
+- production
+- staging
+- monitoring
+- security
+
+Services per Namespace:
+- patient-service (3 replicas)
+- clinical-service (3 replicas)
+- ai-service (5 replicas)
+- integration-service (2 replicas)
+- voice-service (4 replicas)
+- translation-service (3 replicas)
+- api-gateway (3 replicas)
+```
+
+**Service Mesh (Istio):**
+```yaml
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: patient-service
+spec:
+  hosts:
+  - patient-service
+  http:
+  - match:
+    - headers:
+        version:
+          exact: v2
+    route:
+    - destination:
+        host: patient-service
+        subset: v2
+      weight: 10
+    - destination:
+        host: patient-service
+        subset: v1
+      weight: 90
+  - route:
+    - destination:
+        host: patient-service
+        subset: v1
+```
+
+### Database Deployment
+
+**PostgreSQL (Amazon RDS):**
+```
+Configuration:
+- Instance: db.r6g.2xlarge
+- Multi-AZ deployment
+- Read replicas: 2 (for reporting and analytics)
+- Automated backups: Daily, 30-day retention
+- Point-in-time recovery enabled
+- Encryption: AES-256 with KMS
+- Connection pooling: PgBouncer
+
+Performance Optimization:
+- Partitioning: consultations table by date (monthly)
+- Indexes: Covering indexes for common queries
+- Materialized views: For analytics queries
+- Query optimization: EXPLAIN ANALYZE for slow queries
+```
+
+**MongoDB (Amazon DocumentDB):**
+```
+Configuration:
+- Instance: db.r6g.xlarge
+- Cluster: 3 nodes (1 primary, 2 replicas)
+- Automated backups: Daily, 30-day retention
+- Encryption: AES-256 with KMS
+- Sharding: By patientId for horizontal scaling
+
+Collections:
+- medical_documents (sharded)
+- ai_model_outputs (sharded)
+- bias_monitoring_data (time-series)
+```
+
+**Redis (Amazon ElastiCache):**
+```
+Configuration:
+- Node: cache.r6g.large
+- Cluster mode: Enabled (3 shards, 2 replicas per shard)
+- Automatic failover: Enabled
+- Encryption: In-transit and at-rest
+
+Use Cases:
+- Session management (TTL: 15 minutes)
+- API response caching (TTL: 5 minutes)
+- Rate limiting counters
+- Real-time triage queue
+```
+
+### CI/CD Pipeline
+
+```
+GitHub Repository
+    ↓
+GitHub Actions (CI)
+    ↓
+1. Lint & Format Check
+2. Unit Tests
+3. Integration Tests
+4. Security Scan (Snyk)
+5. Build Docker Images
+6. Push to ECR
+    ↓
+ArgoCD (CD)
+    ↓
+1. Deploy to Staging
+2. Run E2E Tests
+3. Performance Tests
+4. Security Tests
+    ↓
+Manual Approval
+    ↓
+5. Canary Deployment (10%)
+6. Monitor Metrics (15 min)
+7. Gradual Rollout (25%, 50%, 100%)
+    ↓
+Production
+```
+
+### Monitoring Stack
+
+**Prometheus + Grafana:**
+```yaml
+# Metrics Collection
+- Application metrics (custom)
+- System metrics (node-exporter)
+- Kubernetes metrics (kube-state-metrics)
+- Database metrics (postgres-exporter, mongodb-exporter)
+- Redis metrics (redis-exporter)
+
+# Dashboards
+- System Health Overview
+- Service Performance
+- Database Performance
+- AI Model Performance
+- Bias Monitoring
+- Security Events
+- Cost Optimization
+```
+
+**CloudWatch:**
+```
+Logs:
+- Application logs (structured JSON)
+- Access logs (API Gateway)
+- Audit logs (security events)
+- Error logs (with stack traces)
+
+Alarms:
+- High error rate (>5%)
+- High latency (p95 >3s)
+- Low availability (<99.5%)
+- Database connection pool exhaustion
+- High memory usage (>80%)
+- Failed deployments
+```
+
+**Distributed Tracing (AWS X-Ray):**
+```
+Trace entire request flow:
+1. API Gateway
+2. Service A
+3. Service B
+4. Database
+5. External API (ABDM)
+
+Identify bottlenecks and optimize performance
+```
+
+### Disaster Recovery
+
+**RTO (Recovery Time Objective): 4 hours**
+**RPO (Recovery Point Objective): 15 minutes**
+
+**Backup Strategy:**
+```
+Databases:
+- Automated daily backups
+- Transaction logs backed up every 15 minutes
+- Cross-region backup replication
+- Monthly backup testing
+
+Application State:
+- Infrastructure as Code (Terraform)
+- Configuration in Git
+- Secrets in AWS Secrets Manager
+- Container images in ECR
+
+Recovery Procedures:
+1. Detect failure (automated monitoring)
+2. Assess impact and decide recovery strategy
+3. Failover to secondary region (automated)
+4. Restore from backups if needed
+5. Verify system functionality
+6. Resume normal operations
+```
+
+**Failover Scenarios:**
+
+*Scenario 1: Primary Region Failure*
+```
+1. Route 53 health check detects failure
+2. Automatic DNS failover to secondary region
+3. Secondary region promoted to primary
+4. Database read replicas promoted to primary
+5. Resume operations in <30 minutes
+```
+
+*Scenario 2: Database Failure*
+```
+1. RDS automatic failover to standby (Multi-AZ)
+2. Application reconnects automatically
+3. Downtime: <2 minutes
+```
+
+*Scenario 3: Service Failure*
+```
+1. Kubernetes detects pod failure
+2. Automatic pod restart
+3. If persistent failure, rollback to previous version
+4. Downtime: <1 minute per service
+```
+
